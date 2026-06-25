@@ -151,10 +151,10 @@ export function calculateGradeability(inputs: CardInputs): GradeabilityResult {
   // Verdict
   let verdict: GradeabilityResult["verdict"];
   let verdictColor: string;
-  if (score >= 80) { verdict = "STRONG BUY"; verdictColor = "#00d4aa"; }
-  else if (score >= 65) { verdict = "GRADE IT"; verdictColor = "#39d353"; }
-  else if (score >= 45) { verdict = "BORDERLINE"; verdictColor = "#f59e0b"; }
-  else if (score >= 30) { verdict = "SKIP IT"; verdictColor = "#f97316"; }
+  if (score >= 85) { verdict = "STRONG BUY"; verdictColor = "#c9aa71"; }
+  else if (score >= 65) { verdict = "GRADE IT"; verdictColor = "#22c55e"; }
+  else if (score >= 40) { verdict = "BORDERLINE"; verdictColor = "#f97316"; }
+  else if (score >= 1)  { verdict = "SKIP IT";    verdictColor = "#ef4444"; }
   else { verdict = "HARD PASS"; verdictColor = "#ef4444"; }
 
   // Risk level
@@ -178,15 +178,15 @@ export function calculateGradeability(inputs: CardInputs): GradeabilityResult {
 }
 
 export const DEFAULT_INPUTS: CardInputs = {
-  rawCost: 50,
-  gradingFee: 25,
-  psa10Value: 300,
-  psa9Value: 120,
-  psa8Value: 60,
-  gemRate: 35,
-  nineRate: 40,
-  eightRate: 15,
-  popTotal: 45,
-  athleteDemand: 7,
-  cardLiquidity: 7,
+  rawCost: 0,
+  gradingFee: 0,
+  psa10Value: 0,
+  psa9Value: 0,
+  psa8Value: 0,
+  gemRate: 0,
+  nineRate: 0,
+  eightRate: 0,
+  popTotal: 0,
+  athleteDemand: 0,
+  cardLiquidity: 0,
 };

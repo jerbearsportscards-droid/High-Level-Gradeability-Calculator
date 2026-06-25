@@ -1,287 +1,645 @@
 "use client";
 
-import { useState, useMemo } from "react";
-import { calculateGradeability, DEFAULT_INPUTS, type CardInputs } from "@/lib/gradeabilityFormula";
+import { useState, useMemo, useRef, useCallback, useEffect } from "react";
+import { calculateGradeability, DEFAULT_INPUTS, type CardInputs, type GradeabilityResult } from "@/lib/gradeabilityFormula";
+
+// ── Upload states ────────────────────────────────────────────────
+type UploadState = "idle" | "dragging" | "analyzing" | "done";
+
+// ── AI Summary generator ─────────────────────────────────────────
+// Builds a plain-English explanation from the real formula output.
+// Real Claude API call replaces this in the next session.
+function buildSummary(label: string, inputs: CardInputs, result: GradeabilityResult): string {
+  const totalCost = inputs.rawCost + inputs.gradingFee;
+  const roiF = result.factorScores.find(f => f.name === "ROI Potential");
+  const gemF = result.factorScores.find(f => f.name === "Gem Rate (PSA 10%)");
+  const popF = result.factorScores.find(f => f.name === "Population Control");
+  const downsideF = result.factorScores.find(f => f.name === "Downside Protection");
+
+  const verdictLine =
+    result.score >= 80 ? `This card is a strong grading candidate.`
+    : result.score >= 65 ? `This card makes sense to grade.`
+    : result.score >= 45 ? `This card is borderline — it could go either way.`
+    : result.score >= 30 ? `This card is not worth grading at current prices.`
+    : `Do not grade this card right now.`;
+
+  const roiLine = result.expectedROI >= 0
+    ? `Your expected return is +${result.expectedROI.toFixed(0)}%, a profit of roughly $${result.expectedProfit.toFixed(0)} after your $${totalCost} all-in cost.`
+    : `The numbers don't work — you're looking at a projected loss of $${Math.abs(result.expectedProfit).toFixed(0)} after your $${totalCost} all-in cost.`;
+
+  const gemLine = inputs.gemRate <= 15
+    ? `The gem rate is the biggest concern here at just ${inputs.gemRate}% — most cards coming back will not be PSA 10s, which is where all the upside lives.`
+    : inputs.gemRate <= 30
+    ? `A ${inputs.gemRate}% gem rate is workable but not great. Roughly 1 in ${Math.round(100/inputs.gemRate)} cards hits a PSA 10.`
+    : `The gem rate is solid at ${inputs.gemRate}%, meaning you have a real shot at the top grade.`;
+
+  const popLine = inputs.popTotal <= 50
+    ? `Population is low at ${inputs.popTotal} PSA 10s, which keeps scarcity working in your favor.`
+    : inputs.popTotal <= 200
+    ? `There are ${inputs.popTotal} PSA 10s in the population — manageable, but worth watching as more get graded.`
+    : `Population is elevated at ${inputs.popTotal} PSA 10s. Supply is growing and that can put downward pressure on prices.`;
+
+  const demandLine = inputs.athleteDemand >= 8
+    ? `Athlete demand is high (${inputs.athleteDemand}/10), which helps on the resale side.`
+    : inputs.athleteDemand >= 5
+    ? `Demand is moderate (${inputs.athleteDemand}/10). There's a market, but you may need to be patient when selling.`
+    : `Demand is soft (${inputs.athleteDemand}/10). A slow market means longer hold times and more price risk.`;
+
+  const downsideLine = downsideF && downsideF.score < 40
+    ? `If the card comes back PSA 8, you lose money — downside protection is weak.`
+    : `Even a PSA 8 keeps you close to breakeven, which limits your worst-case scenario.`;
+
+  const breakLine = result.breakEvenGrade !== "No grade covers cost"
+    ? `You need at least a ${result.breakEvenGrade} to cover your costs.`
+    : `No grade level recovers your full cost — this is high-risk territory.`;
+
+  return [verdictLine, roiLine, gemLine, popLine, demandLine, downsideLine, breakLine].join(" ");
+}
 
 export default function Home() {
   const [inputs, setInputs] = useState<CardInputs>(DEFAULT_INPUTS);
+  const [uploadState, setUploadState] = useState<UploadState>("idle");
+  const [cardImage, setCardImage] = useState<string | null>(null);
+  const [cardLabel, setCardLabel] = useState<string | null>(null);
+  const [showSummary, setShowSummary] = useState(false);
+  const [summaryText, setSummaryText] = useState("");
+  const [typedText, setTypedText] = useState("");
+  const fileRef = useRef<HTMLInputElement>(null);
 
   const result = useMemo(() => calculateGradeability(inputs), [inputs]);
-
   const set = (key: keyof CardInputs, value: number) =>
     setInputs((prev) => ({ ...prev, [key]: value }));
 
+  // Only show score once analysis is fully complete and inputs are filled
+  const hasCard = uploadState === "done";
+  const displayScore = hasCard ? result.score : 0;
+
+  // Score ring math
+  const circumference = 2 * Math.PI * 52;
+  const dashOffset = hasCard
+    ? circumference - (displayScore / 100) * circumference
+    : circumference; // full offset = empty ring
+
   const scoreColor =
-    result.score >= 80 ? "#00d4aa"
-    : result.score >= 65 ? "#39d353"
-    : result.score >= 45 ? "#f59e0b"
-    : result.score >= 30 ? "#f97316"
+    !hasCard ? "#1e2b3d"
+    : displayScore >= 85 ? "#c9aa71"
+    : displayScore >= 65 ? "#22c55e"
+    : displayScore >= 40 ? "#f97316"
     : "#ef4444";
 
-  const circumference = 2 * Math.PI * 54;
-  const dashOffset = circumference - (result.score / 100) * circumference;
+  // ── Animated fill ────────────────────────────────────────────────
+  const animateToTarget = useCallback((target: CardInputs) => {
+    const DURATION = 900;
+    const STEPS = 45;
+    const interval = DURATION / STEPS;
+    let step = 0;
+
+    const ticker = setInterval(() => {
+      step++;
+      const t = 1 - Math.pow(1 - step / STEPS, 3);
+
+      setInputs((prev) => {
+        const lerp = (a: number, b: number) => Math.round(a + (b - a) * t);
+        return {
+          rawCost:       lerp(prev.rawCost,       target.rawCost),
+          gradingFee:    lerp(prev.gradingFee,     target.gradingFee),
+          psa10Value:    lerp(prev.psa10Value,     target.psa10Value),
+          psa9Value:     lerp(prev.psa9Value,      target.psa9Value),
+          psa8Value:     lerp(prev.psa8Value,      target.psa8Value),
+          gemRate:       lerp(prev.gemRate,        target.gemRate),
+          nineRate:      lerp(prev.nineRate,       target.nineRate),
+          eightRate:     lerp(prev.eightRate,      target.eightRate),
+          popTotal:      lerp(prev.popTotal,       target.popTotal),
+          athleteDemand: lerp(prev.athleteDemand,  target.athleteDemand),
+          cardLiquidity: lerp(prev.cardLiquidity,  target.cardLiquidity),
+        };
+      });
+
+      if (step >= STEPS) clearInterval(ticker);
+    }, interval);
+  }, []);
+
+  // ── Upload / drag handlers ───────────────────────────────────────
+  const handleFile = useCallback((file: File) => {
+    if (!file.type.startsWith("image/")) return;
+    const url = URL.createObjectURL(file);
+    setCardImage(url);
+    setUploadState("analyzing");
+    setCardLabel(null);
+
+    // 2024 Panini Donruss Downtown! Caleb Williams #21 RC
+    // Source: GemRate player table (confirmed card-level, not set average)
+    const CALEB_WILLIAMS: CardInputs = {
+      rawCost:       680,   // avg raw sale
+      gradingFee:    25,    // PSA economy tier
+      psa10Value:    1368,  // avg; recent Fanatics sales $1,600–$1,750
+      psa9Value:     762,
+      psa8Value:     600,
+      gemRate:       44,    // 912 PSA 10s out of 2,075 graded — confirmed 44%
+      nineRate:      30,    // ~623 PSA 9s
+      eightRate:     12,    // ~249 PSA 8s
+      popTotal:      912,   // PSA 10 pop count
+      athleteDemand: 6,     // #1 pick 2024, rough rookie season — moderate
+      cardLiquidity: 7,     // large pop = more buyers, decent liquidity
+    };
+
+    setTimeout(() => {
+      const label = "2024 Panini Donruss Downtown! Caleb Williams #21 RC";
+      setCardLabel(label);
+      setUploadState("done");
+      animateToTarget(CALEB_WILLIAMS);
+
+      // Show summary panel after sliders finish animating (~1s delay)
+      setTimeout(() => {
+        const finalResult = calculateGradeability(CALEB_WILLIAMS);
+        const summary = buildSummary(label, CALEB_WILLIAMS, finalResult);
+        setSummaryText(summary);
+        setTypedText("");
+        setShowSummary(true);
+      }, 1100);
+    }, 2200);
+  }, [animateToTarget]);
+
+  // ── Typewriter effect ────────────────────────────────────────────
+  useEffect(() => {
+    if (!showSummary || !summaryText) return;
+    setTypedText("");
+    let i = 0;
+    const ticker = setInterval(() => {
+      i++;
+      setTypedText(summaryText.slice(0, i));
+      if (i >= summaryText.length) clearInterval(ticker);
+    }, 18);
+    return () => clearInterval(ticker);
+  }, [showSummary, summaryText]);
+
+  const onDrop = useCallback((e: React.DragEvent) => {
+    e.preventDefault();
+    setUploadState("idle");
+    const file = e.dataTransfer.files[0];
+    if (file) handleFile(file);
+  }, [handleFile]);
+
+  const onDragOver = (e: React.DragEvent) => { e.preventDefault(); setUploadState("dragging"); };
+  const onDragLeave = () => setUploadState("idle");
+  const onFileInput = (e: React.ChangeEvent<HTMLInputElement>) => {
+    const file = e.target.files?.[0];
+    if (file) handleFile(file);
+  };
 
   return (
-    <div className="min-h-screen" style={{ background: "#080808" }}>
-      {/* Header */}
-      <header style={{ background: "#0d0d0d", borderBottom: "1px solid #1a1a1a" }}>
-        <div className="max-w-7xl mx-auto px-6 py-4 flex items-center justify-between">
+    <div style={{ background: "#07090f", minHeight: "100vh" }}>
+
+      {/* ── HEADER ──────────────────────────────────────────────── */}
+      <header style={{ borderBottom: "1px solid #16202e", background: "#07090f" }}>
+        <div className="max-w-6xl mx-auto px-6 py-4 flex items-center justify-between">
           <div className="flex items-center gap-3">
-            <div className="w-8 h-8 rounded-lg flex items-center justify-center text-sm font-bold" style={{ background: "linear-gradient(135deg, #00d4aa, #39d353)", color: "#080808" }}>
-              G
-            </div>
-            <span className="font-semibold text-lg tracking-tight" style={{ color: "#f5f5f5" }}>Gradeability Score</span>
-            <span className="text-xs px-2 py-0.5 rounded-full font-medium" style={{ background: "#1a1a1a", color: "#00d4aa", border: "1px solid #00d4aa30" }}>BETA</span>
+            <div style={{
+              width: 34, height: 34, borderRadius: 10,
+              background: "linear-gradient(135deg, #c9aa71, #e2c98a)",
+              display: "flex", alignItems: "center", justifyContent: "center",
+              fontWeight: 900, fontSize: 16, color: "#07090f"
+            }}>G</div>
+            <span style={{ fontWeight: 700, fontSize: 17, letterSpacing: "-0.3px", color: "#f5f2ec" }}>
+              Gradeability
+            </span>
+            <span style={{
+              fontSize: 10, fontWeight: 700, letterSpacing: "0.08em",
+              color: "#c9aa71", background: "rgba(201,170,113,0.1)",
+              border: "1px solid rgba(201,170,113,0.25)", borderRadius: 20, padding: "2px 8px"
+            }}>BETA</span>
           </div>
-          <nav className="hidden md:flex items-center gap-6 text-sm" style={{ color: "#666" }}>
-            <span className="cursor-pointer hover:text-white transition-colors" style={{ color: "#00d4aa" }}>Calculator</span>
-            <span className="cursor-pointer hover:text-white transition-colors">Dashboard</span>
-            <span className="cursor-pointer hover:text-white transition-colors">Collection</span>
-            <span className="cursor-pointer hover:text-white transition-colors">Watchlist</span>
+
+          <nav className="hidden md:flex gap-7" style={{ fontSize: 14, color: "#2e3d52" }}>
+            {["Calculator","Dashboard","Collection","Watchlist"].map((item, i) => (
+              <span key={item} style={{ cursor: "pointer", color: i === 0 ? "#c9aa71" : undefined }}
+                className="hover:text-white transition-colors">{item}</span>
+            ))}
           </nav>
-          <button className="text-sm font-medium px-4 py-2 rounded-lg transition-all hover:opacity-80" style={{ background: "#00d4aa", color: "#080808" }}>
-            Sign Up
+
+          <button style={{
+            background: "linear-gradient(135deg, #c9aa71, #e2c98a)",
+            color: "#07090f", fontWeight: 700,
+            fontSize: 14, padding: "8px 20px", borderRadius: 100, border: "none", cursor: "pointer"
+          }}>
+            Get Started
           </button>
         </div>
       </header>
 
-      {/* Main */}
-      <main className="max-w-7xl mx-auto px-6 py-8">
-        <div className="mb-8">
-          <h1 className="text-2xl font-bold mb-1" style={{ color: "#f5f5f5" }}>Gradeability Calculator</h1>
-          <p className="text-sm" style={{ color: "#666" }}>Enter your card&apos;s data to get a 0–100 score on whether it&apos;s worth grading.</p>
-        </div>
+      {/* ── HERO ────────────────────────────────────────────────── */}
+      <div className="max-w-6xl mx-auto px-6 pt-10 pb-4">
+        <p style={{ fontSize: 12, fontWeight: 700, letterSpacing: "0.12em", color: "#2e3d52", marginBottom: 8 }}>
+          GRADEABILITY SCORE
+        </p>
+        <h1 style={{ fontSize: 32, fontWeight: 800, letterSpacing: "-0.5px", color: "#f5f2ec", marginBottom: 6 }}>
+          Should you grade this card?
+        </h1>
+        <p style={{ fontSize: 15, color: "#6b7a8d", maxWidth: 480 }}>
+          Upload a photo — we handle the rest. Get a score in seconds.
+        </p>
+      </div>
 
-        <div className="grid grid-cols-1 lg:grid-cols-3 gap-6">
-          {/* Left column — inputs */}
-          <div className="lg:col-span-2 space-y-4">
+      {/* ── MAIN GRID ───────────────────────────────────────────── */}
+      <div className="max-w-6xl mx-auto px-6 pb-16">
+        <div className="grid grid-cols-1 lg:grid-cols-5 gap-5">
 
-            <Section title="Financial Inputs" icon="$">
-              <div className="grid grid-cols-1 sm:grid-cols-3 gap-4">
-                <InputField label="Raw Card Cost" prefix="$" value={inputs.rawCost} onChange={(v) => set("rawCost", v)} min={1} max={100000} step={1} />
-                <InputField label="Grading Fee" prefix="$" value={inputs.gradingFee} onChange={(v) => set("gradingFee", v)} min={1} max={500} step={1} hint="PSA/BGS service tier" />
-                <StatDisplay label="Total Cost" value={`$${(inputs.rawCost + inputs.gradingFee).toFixed(0)}`} sub="all-in cost" accent />
+          {/* LEFT — Upload + Inputs (3 cols) */}
+          <div className="lg:col-span-3 flex flex-col gap-4">
+
+            {/* UPLOAD CARD */}
+            <Card>
+              <SectionLabel>Step 1 — Upload your card</SectionLabel>
+
+              <div
+                className={`drop-zone${uploadState === "dragging" ? " drag-over" : ""}`}
+                style={{ borderRadius: 14, padding: 24, cursor: "pointer", position: "relative" }}
+                onClick={() => fileRef.current?.click()}
+                onDrop={onDrop}
+                onDragOver={onDragOver}
+                onDragLeave={onDragLeave}
+              >
+                <input ref={fileRef} type="file" accept="image/*" style={{ display: "none" }} onChange={onFileInput} />
+
+                {uploadState === "idle" || uploadState === "dragging" ? (
+                  <div style={{ textAlign: "center", padding: "16px 0" }}>
+                    <div style={{ fontSize: 36, marginBottom: 10 }}>📸</div>
+                    <p style={{ color: "#f5f2ec", fontWeight: 600, fontSize: 15, marginBottom: 4 }}>
+                      Drop your card photo here
+                    </p>
+                    <p style={{ color: "#6b7a8d", fontSize: 13 }}>
+                      or tap to browse · JPG, PNG, HEIC
+                    </p>
+                    {uploadState === "dragging" && (
+                      <p style={{ color: "#c9aa71", fontSize: 13, marginTop: 8, fontWeight: 600 }}>Release to upload</p>
+                    )}
+                  </div>
+                ) : uploadState === "analyzing" ? (
+                  <div style={{ display: "flex", gap: 16, alignItems: "center" }}>
+                    {cardImage && (
+                      <img src={cardImage} alt="card" style={{ width: 72, height: 100, objectFit: "cover", borderRadius: 8, flexShrink: 0 }} />
+                    )}
+                    <div>
+                      <div style={{ display: "flex", alignItems: "center", gap: 8, marginBottom: 6 }}>
+                        <Spinner />
+                        <span style={{ color: "#c9aa71", fontWeight: 700, fontSize: 14 }}>Analyzing card…</span>
+                      </div>
+                      <p style={{ color: "#6b7a8d", fontSize: 13 }}>Reading player, year, set · Pulling PSA pop · Fetching market prices</p>
+                    </div>
+                  </div>
+                ) : (
+                  <div style={{ display: "flex", gap: 16, alignItems: "center" }} className="fade-in">
+                    {cardImage && (
+                      <img src={cardImage} alt="card" style={{ width: 72, height: 100, objectFit: "cover", borderRadius: 8, flexShrink: 0, border: "2px solid #c9aa71" }} />
+                    )}
+                    <div style={{ flex: 1 }}>
+                      <div style={{ display: "flex", alignItems: "center", gap: 6, marginBottom: 4 }}>
+                        <span style={{ color: "#22c55e", fontSize: 16 }}>✓</span>
+                        <span style={{ color: "#22c55e", fontWeight: 700, fontSize: 14 }}>Card identified</span>
+                      </div>
+                      <p style={{ color: "#f5f2ec", fontWeight: 600, fontSize: 14, marginBottom: 8 }}>{cardLabel}</p>
+                      <button
+                        onClick={(e) => { e.stopPropagation(); setUploadState("idle"); setCardImage(null); setCardLabel(null); setShowSummary(false); }}
+                        style={{ fontSize: 12, color: "#6b7a8d", background: "none", border: "none", cursor: "pointer", padding: 0, textDecoration: "underline" }}
+                      >
+                        Upload different card
+                      </button>
+                    </div>
+                    <div style={{ textAlign: "right" }}>
+                      <span style={{ fontSize: 11, color: "#c9aa71", fontWeight: 700, letterSpacing: "0.08em" }}>AUTO-FILLED</span>
+                    </div>
+                  </div>
+                )}
               </div>
-            </Section>
 
-            <Section title="Expected Grade Values" icon="📊">
-              <div className="grid grid-cols-1 sm:grid-cols-3 gap-4">
-                <InputField label="PSA 10 Value" prefix="$" value={inputs.psa10Value} onChange={(v) => set("psa10Value", v)} min={0} max={1000000} step={1} highlight="teal" />
-                <InputField label="PSA 9 Value" prefix="$" value={inputs.psa9Value} onChange={(v) => set("psa9Value", v)} min={0} max={500000} step={1} />
-                <InputField label="PSA 8 Value" prefix="$" value={inputs.psa8Value} onChange={(v) => set("psa8Value", v)} min={0} max={200000} step={1} />
-              </div>
-            </Section>
+              {uploadState !== "done" && (
+                <p style={{ fontSize: 12, color: "#2e3d52", textAlign: "center", marginTop: 12 }}>
+                  AI reads your card and fills everything below automatically
+                </p>
+              )}
+            </Card>
 
-            <Section title="Grading Odds" icon="🎯">
-              <p className="text-xs mb-4" style={{ color: "#555" }}>Estimate the probability distribution for your card&apos;s condition. Rates should sum to ≤100%.</p>
-              <div className="space-y-5">
-                <SliderField label="PSA 10 Gem Rate" value={inputs.gemRate} onChange={(v) => set("gemRate", v)} color="#00d4aa" unit="%" max={90} />
-                <SliderField label="PSA 9 Rate" value={inputs.nineRate} onChange={(v) => set("nineRate", v)} color="#39d353" unit="%" max={90} />
-                <SliderField label="PSA 8 Rate" value={inputs.eightRate} onChange={(v) => set("eightRate", v)} color="#f59e0b" unit="%" max={80} />
-              </div>
-              <div className="mt-4 p-3 rounded-lg flex items-center justify-between" style={{ background: "#0d0d0d" }}>
-                <span className="text-xs" style={{ color: "#555" }}>Below PSA 8 (implied)</span>
-                <span className="text-sm font-mono font-semibold" style={{ color: "#666" }}>
-                  {Math.max(0, 100 - inputs.gemRate - inputs.nineRate - inputs.eightRate).toFixed(0)}%
-                </span>
-              </div>
-            </Section>
+            {/* FINANCIALS */}
+            <Card>
+              <SectionLabel>Step 2 — Confirm the numbers</SectionLabel>
+              <p style={{ fontSize: 12, color: "#2e3d52", marginBottom: 16, marginTop: -6 }}>These auto-fill from your card photo. Adjust if needed.</p>
 
-            <Section title="Market Factors" icon="📈">
-              <div className="grid grid-cols-1 sm:grid-cols-3 gap-4 mb-5">
-                <InputField label="PSA 10 Pop Count" value={inputs.popTotal} onChange={(v) => set("popTotal", v)} min={0} max={50000} step={1} hint="Total PSA 10s graded" />
-              </div>
-              <div className="space-y-5">
-                <SliderField label="Athlete Demand" value={inputs.athleteDemand} onChange={(v) => set("athleteDemand", v)} color="#a78bfa" unit="/10" max={10} min={1} step={1} hint="1 = bench player  •  10 = all-time superstar" />
-                <SliderField label="Card Liquidity" value={inputs.cardLiquidity} onChange={(v) => set("cardLiquidity", v)} color="#60a5fa" unit="/10" max={10} min={1} step={1} hint="1 = very hard to sell  •  10 = instant sale" />
-              </div>
-            </Section>
-
-          </div>
-
-          {/* Right column — score */}
-          <div className="space-y-4">
-
-            <div className="rounded-2xl p-6 text-center" style={{ background: "#111", border: "1px solid #1e1e1e" }}>
-              <div className="flex justify-center mb-4">
-                <svg width="140" height="140" viewBox="0 0 140 140" className="score-glow">
-                  <circle cx="70" cy="70" r="54" fill="none" stroke="#1e1e1e" strokeWidth="10" />
-                  <circle
-                    cx="70" cy="70" r="54"
-                    fill="none"
-                    stroke={scoreColor}
-                    strokeWidth="10"
-                    strokeLinecap="round"
-                    strokeDasharray={circumference}
-                    strokeDashoffset={dashOffset}
-                    transform="rotate(-90 70 70)"
-                    style={{ transition: "stroke-dashoffset 0.6s ease, stroke 0.4s ease" }}
-                  />
-                  <text x="70" y="65" textAnchor="middle" fontSize="32" fontWeight="800" fill={scoreColor} style={{ transition: "fill 0.4s ease" }}>
-                    {result.score}
-                  </text>
-                  <text x="70" y="83" textAnchor="middle" fontSize="10" fill="#555" letterSpacing="2">
-                    /100
-                  </text>
-                </svg>
-              </div>
-
-              <div className="mb-4">
-                <div className="text-xs mb-1" style={{ color: "#555" }}>VERDICT</div>
-                <div className="text-xl font-black tracking-widest" style={{ color: result.verdictColor, transition: "color 0.4s ease" }}>
-                  {result.verdict}
+              <div className="grid grid-cols-3 gap-3 mb-4">
+                <NumberInput label="Raw Card Cost" prefix="$" value={inputs.rawCost} onChange={(v) => set("rawCost", v)} />
+                <NumberInput label="Grading Fee" prefix="$" value={inputs.gradingFee} onChange={(v) => set("gradingFee", v)} hint="PSA/BGS tier" />
+                <div>
+                  <FieldLabel>Total Cost</FieldLabel>
+                  <div style={{ background: "#07090f", border: "1px solid #16202e", borderRadius: 12, padding: "12px 14px" }}>
+                    <span style={{ fontWeight: 800, fontSize: 20, color: "#c9aa71" }}>
+                      ${(inputs.rawCost + inputs.gradingFee).toFixed(0)}
+                    </span>
+                  </div>
                 </div>
               </div>
 
-              <div className="grid grid-cols-2 gap-3">
-                <MiniStat
-                  label="Expected ROI"
-                  value={`${result.expectedROI >= 0 ? "+" : ""}${result.expectedROI.toFixed(0)}%`}
-                  color={result.expectedROI >= 0 ? "#39d353" : "#ef4444"}
-                />
-                <MiniStat
-                  label="Exp. Profit"
-                  value={`${result.expectedProfit >= 0 ? "+$" : "-$"}${Math.abs(result.expectedProfit).toFixed(0)}`}
-                  color={result.expectedProfit >= 0 ? "#39d353" : "#ef4444"}
-                />
-                <MiniStat label="Break-Even" value={result.breakEvenGrade} color="#888" />
-                <MiniStat
-                  label="Risk Level"
-                  value={result.riskLevel}
-                  color={result.riskLevel === "LOW" ? "#39d353" : result.riskLevel === "MEDIUM" ? "#f59e0b" : result.riskLevel === "HIGH" ? "#f97316" : "#ef4444"}
-                />
+              <div className="grid grid-cols-3 gap-3">
+                <NumberInput label="PSA 10 Value" prefix="$" value={inputs.psa10Value} onChange={(v) => set("psa10Value", v)} accent />
+                <NumberInput label="PSA 9 Value" prefix="$" value={inputs.psa9Value} onChange={(v) => set("psa9Value", v)} />
+                <NumberInput label="PSA 8 Value" prefix="$" value={inputs.psa8Value} onChange={(v) => set("psa8Value", v)} />
               </div>
+            </Card>
+
+            {/* GRADING ODDS + MARKET */}
+            <Card>
+              <div className="grid grid-cols-1 md:grid-cols-2 gap-6">
+                <div>
+                  <SectionLabel>Grading Odds</SectionLabel>
+                  <div className="flex flex-col gap-4 mt-3">
+                    <SliderInput label="PSA 10 Gem Rate" value={inputs.gemRate} onChange={(v) => set("gemRate", v)} color="#c6f135" unit="%" max={90} />
+                    <SliderInput label="PSA 9 Rate" value={inputs.nineRate} onChange={(v) => set("nineRate", v)} color="#00d26a" unit="%" max={90} />
+                    <SliderInput label="PSA 8 Rate" value={inputs.eightRate} onChange={(v) => set("eightRate", v)} color="#ffb547" unit="%" max={80} />
+                  </div>
+                  <div style={{ marginTop: 12, background: "#07090f", border: "1px solid #16202e", borderRadius: 8, padding: "8px 12px", display: "flex", justifyContent: "space-between" }}>
+                    <span style={{ fontSize: 12, color: "#2e3d52" }}>Below PSA 8</span>
+                    <span style={{ fontSize: 12, fontWeight: 700, color: "#6b7a8d" }}>
+                      {Math.max(0, 100 - inputs.gemRate - inputs.nineRate - inputs.eightRate)}%
+                    </span>
+                  </div>
+                </div>
+                <div>
+                  <SectionLabel>Market Factors</SectionLabel>
+                  <div className="flex flex-col gap-4 mt-3">
+                    <NumberInput label="PSA 10 Pop Count" value={inputs.popTotal} onChange={(v) => set("popTotal", v)} hint="Total graded PSA 10s" />
+                    <SliderInput label="Athlete Demand" value={inputs.athleteDemand} onChange={(v) => set("athleteDemand", v)} color="#a78bfa" unit="/10" max={10} min={1} step={1} hint="1 = bench · 10 = all-time great" />
+                    <SliderInput label="Card Liquidity" value={inputs.cardLiquidity} onChange={(v) => set("cardLiquidity", v)} color="#60a5fa" unit="/10" max={10} min={1} step={1} hint="1 = hard sell · 10 = instant flip" />
+                  </div>
+                </div>
+              </div>
+            </Card>
+
+          </div>
+
+          {/* RIGHT — Score Panel (2 cols) */}
+          <div className="lg:col-span-2 flex flex-col gap-4">
+
+            {/* SCORE HERO */}
+            <div style={{
+              background: "#0c1018",
+              border: "1px solid #16202e",
+              borderRadius: 20,
+              padding: "32px 24px",
+              textAlign: "center",
+              position: "sticky",
+              top: 20
+            }}>
+              {/* Ring */}
+              <div style={{ display: "flex", justifyContent: "center", marginBottom: 20 }}>
+                <svg width="210" height="210" viewBox="0 0 160 160" className={hasCard ? "score-glow" : "ring-shimmer"} suppressHydrationWarning>
+                  {Array.from({ length: 20 }).map((_, i) => {
+                    const angle = (i / 20) * 360 - 90;
+                    const rad = (angle * Math.PI) / 180;
+                    const r1 = 70, r2 = 74;
+                    return (
+                      <line key={i}
+                        x1={parseFloat((80 + r1 * Math.cos(rad)).toFixed(2))}
+                        y1={parseFloat((80 + r1 * Math.sin(rad)).toFixed(2))}
+                        x2={parseFloat((80 + r2 * Math.cos(rad)).toFixed(2))}
+                        y2={parseFloat((80 + r2 * Math.sin(rad)).toFixed(2))}
+                        stroke="#16202e" strokeWidth="1.5"
+                      />
+                    );
+                  })}
+                  <circle cx="80" cy="80" r="52" fill="none" stroke={hasCard ? "#101820" : "rgba(201,170,113,0.15)"} strokeWidth="12" />
+                  <circle
+                    cx="80" cy="80" r="52"
+                    fill="none"
+                    stroke={hasCard ? scoreColor : "#c9aa71"}
+                    strokeWidth="12"
+                    strokeLinecap="round"
+                    strokeDasharray={circumference}
+                    strokeDashoffset={dashOffset}
+                    transform="rotate(-90 80 80)"
+                    style={{ transition: "stroke-dashoffset 0.7s cubic-bezier(.4,0,.2,1), stroke 0.4s ease" }}
+                  />
+                  {hasCard && <>
+                    <text x="80" y="74" textAnchor="middle" fontSize="38" fontWeight="900" fill={scoreColor}
+                      style={{ transition: "fill 0.4s ease", fontFamily: "-apple-system, sans-serif" }}>
+                      {result.score}
+                    </text>
+                    <text x="80" y="92" textAnchor="middle" fontSize="11" fill="#2e3d52" letterSpacing="2">OUT OF 100</text>
+                  </>}
+                </svg>
+              </div>
+
+              {/* Verdict + stats — only shown after upload */}
+              {!hasCard ? (
+                <p style={{ fontSize: 13, color: "#c9aa71", marginBottom: 24, fontWeight: 600, letterSpacing: "0.03em", textShadow: "0 0 12px rgba(201,170,113,0.4)" }}>Upload a card to see your score</p>
+              ) : (
+                <div>
+                  <div style={{
+                    display: "inline-block",
+                    background: `${scoreColor}18`,
+                    border: `1px solid ${scoreColor}35`,
+                    borderRadius: 100,
+                    padding: "6px 20px",
+                    marginBottom: 24
+                  }}>
+                    <span style={{ fontSize: 15, fontWeight: 900, letterSpacing: "0.12em", color: scoreColor }}>
+                      {result.verdict}
+                    </span>
+                  </div>
+
+                  <div className="grid grid-cols-2 gap-2 mb-6">
+                    {[
+                      { label: "Expected ROI", value: `${result.expectedROI >= 0 ? "+" : ""}${result.expectedROI.toFixed(0)}%`, color: result.expectedROI >= 0 ? "#22c55e" : "#ef4444" },
+                      { label: "Exp. Profit", value: `${result.expectedProfit >= 0 ? "+$" : "-$"}${Math.abs(result.expectedProfit).toFixed(0)}`, color: result.expectedProfit >= 0 ? "#22c55e" : "#ef4444" },
+                      { label: "Break-Even", value: result.breakEvenGrade, color: "#6b7a8d" },
+                      { label: "Risk", value: result.riskLevel, color: result.riskLevel === "LOW" ? "#22c55e" : result.riskLevel === "MEDIUM" ? "#f59e0b" : result.riskLevel === "HIGH" ? "#e07040" : "#ef4444" },
+                    ].map(({ label, value, color }) => (
+                      <div key={label} style={{ background: "#07090f", border: "1px solid #16202e", borderRadius: 12, padding: "12px 14px", textAlign: "left" }}>
+                        <div style={{ fontSize: 11, color: "#2e3d52", marginBottom: 4, fontWeight: 600, letterSpacing: "0.04em" }}>{label.toUpperCase()}</div>
+                        <div style={{ fontSize: 15, fontWeight: 800, color }}>{value}</div>
+                      </div>
+                    ))}
+                  </div>
+
+                  <div style={{ borderTop: "1px solid #16202e", paddingTop: 20 }}>
+                    <p style={{ fontSize: 11, fontWeight: 700, letterSpacing: "0.1em", color: "#2e3d52", marginBottom: 14, textAlign: "left" }}>FACTOR BREAKDOWN</p>
+                    <div className="flex flex-col gap-3">
+                      {result.factorScores.map((f) => {
+                        const barColor = f.score >= 70 ? "#c9aa71" : f.score >= 45 ? "#f59e0b" : "#ef4444";
+                        return (
+                          <div key={f.name}>
+                            <div style={{ display: "flex", justifyContent: "space-between", marginBottom: 4 }}>
+                              <span style={{ fontSize: 11, color: "#6b7a8d" }}>{f.name}</span>
+                              <div style={{ display: "flex", gap: 6 }}>
+                                <span style={{ fontSize: 11, color: "#2e3d52" }}>{f.weight}%</span>
+                                <span style={{ fontSize: 11, fontWeight: 700, color: barColor }}>{f.score.toFixed(0)}</span>
+                              </div>
+                            </div>
+                            <div style={{ height: 3, background: "#16202e", borderRadius: 2, overflow: "hidden" }}>
+                              <div style={{ height: "100%", width: `${f.score}%`, background: barColor, borderRadius: 2, transition: "width 0.6s cubic-bezier(.4,0,.2,1)" }} />
+                            </div>
+                          </div>
+                        );
+                      })}
+                    </div>
+                    <div style={{ display: "flex", justifyContent: "space-between", marginTop: 16, paddingTop: 14, borderTop: "1px solid #16202e" }}>
+                      <span style={{ fontSize: 12, fontWeight: 700, color: "#2e3d52", letterSpacing: "0.08em" }}>TOTAL</span>
+                      <span style={{ fontSize: 18, fontWeight: 900, color: scoreColor }}>{result.score}/100</span>
+                    </div>
+                  </div>
+                </div>
+              )}
             </div>
 
-            <div className="rounded-2xl p-5" style={{ background: "#111", border: "1px solid #1e1e1e" }}>
-              <h3 className="text-xs font-semibold mb-4 tracking-widest" style={{ color: "#555" }}>FACTOR BREAKDOWN</h3>
-              <div className="space-y-3">
-                {result.factorScores.map((f) => (
-                  <div key={f.name}>
-                    <div className="flex items-center justify-between mb-1">
-                      <span className="text-xs" style={{ color: "#888" }}>{f.name}</span>
-                      <div className="flex items-center gap-2">
-                        <span className="text-xs" style={{ color: "#555" }}>{f.weight}%</span>
-                        <span className="text-xs font-semibold" style={{ color: f.score >= 70 ? "#00d4aa" : f.score >= 45 ? "#f59e0b" : "#ef4444" }}>
-                          {f.score.toFixed(0)}
-                        </span>
-                      </div>
-                    </div>
-                    <div className="h-1.5 rounded-full overflow-hidden" style={{ background: "#1e1e1e" }}>
-                      <div
-                        className="h-full rounded-full transition-all duration-500"
-                        style={{
-                          width: `${f.score}%`,
-                          background: f.score >= 70 ? "#00d4aa" : f.score >= 45 ? "#f59e0b" : "#ef4444"
-                        }}
-                      />
-                    </div>
-                    <div className="text-xs mt-0.5" style={{ color: "#444" }}>{f.label}</div>
+          </div>
+        </div>
+
+        {/* ── AI SUMMARY PANEL ──────────────────────────────────── */}
+        {showSummary && (
+          <div className="fade-in" style={{ marginTop: 20 }}>
+            <div style={{
+              background: "#0c1018",
+              border: "1px solid #16202e",
+              borderRadius: 20,
+              padding: "24px 28px",
+              position: "relative",
+              overflow: "hidden",
+            }}>
+              {/* Accent bar */}
+              <div style={{
+                position: "absolute", top: 0, left: 0, right: 0, height: 2,
+                background: `linear-gradient(90deg, #c9aa71, transparent)`
+              }} />
+
+              <div style={{ display: "flex", alignItems: "center", gap: 10, marginBottom: 16 }}>
+                <div style={{
+                  width: 28, height: 28, borderRadius: 8,
+                  background: "rgba(201,170,113,0.1)", border: "1px solid rgba(201,170,113,0.2)",
+                  display: "flex", alignItems: "center", justifyContent: "center", fontSize: 14
+                }}>✦</div>
+                <div>
+                  <p style={{ fontSize: 11, fontWeight: 700, letterSpacing: "0.1em", color: "#6b7a8d", marginBottom: 1 }}>AI ANALYSIS</p>
+                  <p style={{ fontSize: 12, color: "#2e3d52" }}>{cardLabel}</p>
+                </div>
+                <div style={{ marginLeft: "auto" }}>
+                  <span style={{
+                    fontSize: 11, fontWeight: 800, letterSpacing: "0.08em",
+                    color: scoreColor,
+                    background: `${scoreColor}15`,
+                    border: `1px solid ${scoreColor}30`,
+                    borderRadius: 100, padding: "3px 10px"
+                  }}>{result.verdict}</span>
+                </div>
+              </div>
+
+              <p style={{
+                fontSize: 15, lineHeight: 1.75, color: "#c8c4bc",
+                fontWeight: 400, maxWidth: 860,
+              }}>
+                {typedText}
+                <span style={{
+                  display: "inline-block", width: 2, height: "1em",
+                  background: "#c9aa71", marginLeft: 2, verticalAlign: "text-bottom",
+                  opacity: typedText.length < summaryText.length ? 1 : 0,
+                  animation: "blink 0.7s step-end infinite"
+                }} />
+              </p>
+
+              <style>{`@keyframes blink { 0%,100%{opacity:1} 50%{opacity:0} }`}</style>
+
+              <div style={{ marginTop: 18, display: "flex", gap: 8, flexWrap: "wrap" }}>
+                {[
+                  { label: "Gem Rate", value: `${inputs.gemRate}%`, warn: inputs.gemRate < 20 },
+                  { label: "PSA 10 Value", value: `$${inputs.psa10Value.toLocaleString()}` },
+                  { label: "All-In Cost", value: `$${(inputs.rawCost + inputs.gradingFee).toLocaleString()}` },
+                  { label: "Expected ROI", value: `${result.expectedROI >= 0 ? "+" : ""}${result.expectedROI.toFixed(0)}%`, warn: result.expectedROI < 0 },
+                  { label: "Break-Even", value: result.breakEvenGrade },
+                ].map(({ label, value, warn }) => (
+                  <div key={label} style={{
+                    fontSize: 12, padding: "5px 12px", borderRadius: 100,
+                    background: warn ? "rgba(239,68,68,0.08)" : "#0f1520",
+                    border: `1px solid ${warn ? "rgba(239,68,68,0.2)" : "#1e2b3d"}`,
+                    color: warn ? "#ef4444" : "#6b7a8d",
+                  }}>
+                    <span style={{ color: "#2e3d52" }}>{label}: </span>
+                    <span style={{ fontWeight: 700 }}>{value}</span>
                   </div>
                 ))}
               </div>
-              <div className="mt-4 pt-4 flex items-center justify-between" style={{ borderTop: "1px solid #1e1e1e" }}>
-                <span className="text-xs font-semibold tracking-widest" style={{ color: "#555" }}>TOTAL SCORE</span>
-                <span className="text-lg font-black" style={{ color: scoreColor }}>{result.score}/100</span>
-              </div>
             </div>
-
-            <p className="text-xs text-center px-2" style={{ color: "#333" }}>
-              Not financial advice. Grading outcomes vary. Verify PSA pop data and market values independently.
-            </p>
           </div>
-        </div>
-      </main>
+        )}
+
+      </div>
+
     </div>
   );
 }
 
-function Section({ title, icon, children }: { title: string; icon: string; children: React.ReactNode }) {
+// ── Helper components ────────────────────────────────────────────
+
+function Card({ children }: { children: React.ReactNode }) {
   return (
-    <div className="rounded-2xl p-5" style={{ background: "#111", border: "1px solid #1e1e1e" }}>
-      <div className="flex items-center gap-2 mb-4">
-        <span className="text-base">{icon}</span>
-        <h2 className="text-sm font-semibold tracking-wide" style={{ color: "#f5f5f5" }}>{title}</h2>
-      </div>
+    <div style={{ background: "#0c1018", border: "1px solid #16202e", borderRadius: 20, padding: "20px 22px" }}>
       {children}
     </div>
   );
 }
 
-function InputField({
-  label, value, onChange, prefix, min = 0, max = 999999, step = 1, hint, highlight,
-}: {
+function SectionLabel({ children }: { children: React.ReactNode }) {
+  return <p style={{ fontSize: 11, fontWeight: 700, letterSpacing: "0.1em", color: "#6b7a8d", marginBottom: 14 }}>{children}</p>;
+}
+
+function FieldLabel({ children }: { children: React.ReactNode }) {
+  return <p style={{ fontSize: 11, color: "#6b7a8d", fontWeight: 600, marginBottom: 6 }}>{children}</p>;
+}
+
+function NumberInput({ label, value, onChange, prefix, min = 0, max = 999999, step = 1, hint, accent }: {
   label: string; value: number; onChange: (v: number) => void;
-  prefix?: string; min?: number; max?: number; step?: number;
-  hint?: string; highlight?: string;
+  prefix?: string; min?: number; max?: number; step?: number; hint?: string; accent?: boolean;
 }) {
   return (
     <div>
-      <label className="block text-xs mb-1.5" style={{ color: "#666" }}>{label}</label>
-      <div className="relative flex items-center rounded-xl overflow-hidden" style={{
-        background: "#161616",
-        border: `1px solid ${highlight === "teal" ? "#00d4aa40" : "#222"}`,
+      <FieldLabel>{label}</FieldLabel>
+      <div style={{
+        display: "flex", alignItems: "center",
+        background: "#101520",
+        border: `1px solid ${accent ? "rgba(201,170,113,0.3)" : "#1e2b3d"}`,
+        borderRadius: 12,
+        overflow: "hidden",
       }}>
-        {prefix && <span className="pl-3 text-sm" style={{ color: "#555" }}>{prefix}</span>}
+        {prefix && <span style={{ paddingLeft: 12, color: "#2e3d52", fontSize: 14 }}>{prefix}</span>}
         <input
-          type="number"
-          value={value}
-          min={min}
-          max={max}
-          step={step}
+          type="number" value={value} min={min} max={max} step={step}
           onChange={(e) => onChange(Math.max(min, Math.min(max, Number(e.target.value))))}
-          className="flex-1 bg-transparent px-3 py-3 text-sm outline-none"
-          style={{ color: "#f5f5f5" }}
+          style={{ flex: 1, background: "transparent", border: "none", outline: "none", padding: "11px 12px", fontSize: 14, fontWeight: 700, color: "#f5f2ec" }}
         />
       </div>
-      {hint && <p className="text-xs mt-1" style={{ color: "#444" }}>{hint}</p>}
+      {hint && <p style={{ fontSize: 11, color: "#2e3d52", marginTop: 4 }}>{hint}</p>}
     </div>
   );
 }
 
-function SliderField({
-  label, value, onChange, color, unit, max = 100, min = 0, step = 1, hint
-}: {
+function SliderInput({ label, value, onChange, color, unit, max = 100, min = 0, step = 1, hint }: {
   label: string; value: number; onChange: (v: number) => void;
   color: string; unit: string; max?: number; min?: number; step?: number; hint?: string;
 }) {
   return (
     <div>
-      <div className="flex items-center justify-between mb-2">
-        <label className="text-xs" style={{ color: "#888" }}>{label}</label>
-        <span className="text-sm font-bold" style={{ color }}>{value}{unit}</span>
+      <div style={{ display: "flex", justifyContent: "space-between", marginBottom: 6 }}>
+        <span style={{ fontSize: 12, color: "#6b7a8d" }}>{label}</span>
+        <span style={{ fontSize: 13, fontWeight: 800, color }}>{value}{unit}</span>
       </div>
-      <input
-        type="range"
-        min={min}
-        max={max}
-        step={step}
-        value={value}
+      <input type="range" min={min} max={max} step={step} value={value}
         onChange={(e) => onChange(Number(e.target.value))}
-        style={{ width: "100%", accentColor: color }}
-      />
-      {hint && <p className="text-xs mt-1" style={{ color: "#444" }}>{hint}</p>}
+        style={{ accentColor: color }} />
+      {hint && <p style={{ fontSize: 11, color: "#2e3d52", marginTop: 2 }}>{hint}</p>}
     </div>
   );
 }
 
-function MiniStat({ label, value, color }: { label: string; value: string; color: string }) {
+function Spinner() {
   return (
-    <div className="rounded-xl p-3" style={{ background: "#0d0d0d", border: "1px solid #1a1a1a" }}>
-      <div className="text-xs mb-1" style={{ color: "#555" }}>{label}</div>
-      <div className="text-sm font-bold" style={{ color }}>{value}</div>
-    </div>
-  );
-}
-
-function StatDisplay({ label, value, sub, accent }: { label: string; value: string; sub?: string; accent?: boolean }) {
-  return (
-    <div>
-      <label className="block text-xs mb-1.5" style={{ color: "#666" }}>{label}</label>
-      <div className="rounded-xl px-4 py-3" style={{ background: "#0d0d0d", border: "1px solid #1e1e1e" }}>
-        <div className="text-xl font-bold" style={{ color: accent ? "#00d4aa" : "#f5f5f5" }}>{value}</div>
-        {sub && <div className="text-xs mt-0.5" style={{ color: "#444" }}>{sub}</div>}
-      </div>
-    </div>
+    <svg width="16" height="16" viewBox="0 0 16 16" style={{ animation: "spin 0.8s linear infinite" }}>
+      <style>{`@keyframes spin { to { transform: rotate(360deg); } }`}</style>
+      <circle cx="8" cy="8" r="6" fill="none" stroke="#c9aa71" strokeWidth="2" strokeDasharray="20" strokeDashoffset="10" strokeLinecap="round" />
+    </svg>
   );
 }
