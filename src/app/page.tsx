@@ -1,683 +1,327 @@
 "use client";
+import Link from "next/link";
+import { useEffect, useRef, useState } from "react";
+import Nav from "@/components/Nav";
+import Footer from "@/components/Footer";
 
-import { useState, useMemo, useRef, useCallback, useEffect } from "react";
-import { calculateGradeability, DEFAULT_INPUTS, type CardInputs, type GradeabilityResult } from "@/lib/gradeabilityFormula";
+const ALERT_WINS = [
+  { user: "@BreakKing_FL",    card: "Mahomes Chrome Prizm RC",           profit: "+$1,840", grade: "PSA 10" },
+  { user: "@CardFlipperTX",   card: "Wander Franco Bowman Auto",         profit: "+$870",   grade: "PSA 10" },
+  { user: "@FlipQueenATL",    card: "LeBron 2003 Topps Chrome RC",       profit: "+$4,200", grade: "PSA 10" },
+  { user: "Marcus D.",        card: "Luka Doncic Prizm Silver RPA",      profit: "+$2,100", grade: "PSA 10" },
+  { user: "@GradeGodNYC",     card: "Shohei Ohtani Bowman Chrome Auto",  profit: "+$3,400", grade: "PSA 10" },
+  { user: "Kevin R.",         card: "Justin Jefferson Select RC",         profit: "+$540",   grade: "PSA 10" },
+  { user: "@BreakerPro22",    card: "Mike Trout 2011 Bowman Chrome RC",  profit: "+$1,200", grade: "PSA 10" },
+  { user: "Sarah M.",         card: "Victor Wembanyama Prizm Draft RC",  profit: "+$980",   grade: "PSA 10" },
+  { user: "@CollectorKing",   card: "Caitlin Clark Prizm Rookie",        profit: "+$660",   grade: "PSA 10" },
+  { user: "James L.",         card: "Fernando Tatis Jr. Bowman Auto",    profit: "+$1,560", grade: "PSA 10" },
+];
 
-// ── Upload states ────────────────────────────────────────────────
-type UploadState = "idle" | "dragging" | "analyzing" | "done";
+const TICKER_ITEMS = [
+  { type: "win",   user: "Marcus D.",     card: "2017 Prizm Mahomes RC",               profit: "+$1,840", grade: "PSA 10" },
+  { type: "price", card: "2003 Topps Chrome LeBron RC",       price: "$18,500", change: "+12%" },
+  { type: "win",   user: "Sarah M.",      card: "2003 Topps Chrome LeBron RC",         profit: "+$4,200", grade: "PSA 10" },
+  { type: "price", card: "2020 Bowman Chrome Wander Franco",  price: "$420",    change: "+8%"  },
+  { type: "win",   user: "Kevin R.",      card: "2018 Bowman Chrome Ohtani Auto",      profit: "+$2,100", grade: "PSA 10" },
+  { type: "price", card: "2011 Bowman Chrome Trout RC",       price: "$3,200",  change: "+5%"  },
+  { type: "win",   user: "James L.",      card: "2019 Prizm Luka Doncic Silver",       profit: "+$2,340", grade: "PSA 10" },
+  { type: "price", card: "2017 Prizm Patrick Mahomes RC",     price: "$5,800",  change: "+22%" },
+  { type: "win",   user: "@GradeGodNYC", card: "Ohtani Bowman Chrome Auto",           profit: "+$3,400", grade: "PSA 10" },
+  { type: "price", card: "2023 Bowman Wembanyama RC",         price: "$280",    change: "+41%" },
+];
 
-// ── AI Summary generator ─────────────────────────────────────────
-// Builds a plain-English explanation from the real formula output.
-// Real Claude API call replaces this in the next session.
-function buildSummary(label: string, inputs: CardInputs, result: GradeabilityResult): string {
-  const totalCost = inputs.rawCost + inputs.gradingFee;
-  const roiF = result.factorScores.find(f => f.name === "ROI Potential");
-  const gemF = result.factorScores.find(f => f.name === "Gem Rate (PSA 10%)");
-  const popF = result.factorScores.find(f => f.name === "Population Control");
-  const downsideF = result.factorScores.find(f => f.name === "Downside Protection");
+const WINS = [
+  { user: "Marcus D.", location: "Miami, FL", profit: "+$1,840", card: "2017 Prizm Mahomes RC · Score 83/100 · PSA 10", quote: "Score came back 83. I was skeptical but I shipped it. Came back PSA 10, sold for $2,040. Bought it for $175 at a show. This thing is the real deal." },
+  { user: "Sarah M.",  location: "Atlanta, GA", profit: "+$4,200", card: "2003 Topps Chrome LeBron RC · Score 91/100 · PSA 10", quote: "I had this LeBron RC sitting in a box for two years. Ran the score on a whim — 91 out of 100. Shipped it in a week. Changed my whole outlook on what I have." },
+  { user: "Kevin R.",  location: "Dallas, TX", profit: "+$2,100", card: "2018 Bowman Chrome Ohtani Auto · Score 78/100 · PSA 10", quote: "Used it before submitting 8 cards. Skipped 3 it flagged as low-score. The 5 I sent? All came back profitable. Saved me from burning $75 on bad submissions." },
+];
 
-  const verdictLine =
-    result.score >= 80 ? `This card is a strong grading candidate.`
-    : result.score >= 65 ? `This card makes sense to grade.`
-    : result.score >= 45 ? `This card is borderline — it could go either way.`
-    : result.score >= 30 ? `This card is not worth grading at current prices.`
-    : `Do not grade this card right now.`;
-
-  const roiLine = result.expectedROI >= 0
-    ? `Your expected return is +${result.expectedROI.toFixed(0)}%, a profit of roughly $${result.expectedProfit.toFixed(0)} after your $${totalCost} all-in cost.`
-    : `The numbers don't work — you're looking at a projected loss of $${Math.abs(result.expectedProfit).toFixed(0)} after your $${totalCost} all-in cost.`;
-
-  const gemLine = inputs.gemRate <= 15
-    ? `The gem rate is the biggest concern here at just ${inputs.gemRate}% — most cards coming back will not be PSA 10s, which is where all the upside lives.`
-    : inputs.gemRate <= 30
-    ? `A ${inputs.gemRate}% gem rate is workable but not great. Roughly 1 in ${Math.round(100/inputs.gemRate)} cards hits a PSA 10.`
-    : `The gem rate is solid at ${inputs.gemRate}%, meaning you have a real shot at the top grade.`;
-
-  const popLine = inputs.popTotal <= 50
-    ? `Population is low at ${inputs.popTotal} PSA 10s, which keeps scarcity working in your favor.`
-    : inputs.popTotal <= 200
-    ? `There are ${inputs.popTotal} PSA 10s in the population — manageable, but worth watching as more get graded.`
-    : `Population is elevated at ${inputs.popTotal} PSA 10s. Supply is growing and that can put downward pressure on prices.`;
-
-  const demandLine = inputs.athleteDemand >= 8
-    ? `Athlete demand is high (${inputs.athleteDemand}/10), which helps on the resale side.`
-    : inputs.athleteDemand >= 5
-    ? `Demand is moderate (${inputs.athleteDemand}/10). There's a market, but you may need to be patient when selling.`
-    : `Demand is soft (${inputs.athleteDemand}/10). A slow market means longer hold times and more price risk.`;
-
-  const downsideLine = downsideF && downsideF.score < 40
-    ? `If the card comes back PSA 8, you lose money — downside protection is weak.`
-    : `Even a PSA 8 keeps you close to breakeven, which limits your worst-case scenario.`;
-
-  const breakLine = result.breakEvenGrade !== "No grade covers cost"
-    ? `You need at least a ${result.breakEvenGrade} to cover your costs.`
-    : `No grade level recovers your full cost — this is high-risk territory.`;
-
-  return [verdictLine, roiLine, gemLine, popLine, demandLine, downsideLine, breakLine].join(" ");
+function useCounter(target: number, duration = 2000) {
+  const [val, setVal] = useState(0);
+  const ref = useRef<HTMLDivElement>(null);
+  useEffect(() => {
+    const el = ref.current;
+    if (!el) return;
+    const obs = new IntersectionObserver(([entry]) => {
+      if (!entry.isIntersecting) return;
+      obs.disconnect();
+      const start = performance.now();
+      const tick = (now: number) => {
+        const t = Math.min((now - start) / duration, 1);
+        const eased = 1 - Math.pow(1 - t, 3);
+        setVal(Math.round(target * eased));
+        if (t < 1) requestAnimationFrame(tick);
+      };
+      requestAnimationFrame(tick);
+    }, { threshold: 0.3 });
+    obs.observe(el);
+    return () => obs.disconnect();
+  }, [target, duration]);
+  return { val, ref };
 }
 
-export default function Home() {
-  const [inputs, setInputs] = useState<CardInputs>(DEFAULT_INPUTS);
-  const [uploadState, setUploadState] = useState<UploadState>("idle");
-  const [cardImage, setCardImage] = useState<string | null>(null);
-  const [cardLabel, setCardLabel] = useState<string | null>(null);
-  const [showSummary, setShowSummary] = useState(false);
-  const [summaryText, setSummaryText] = useState("");
-  const [typedText, setTypedText] = useState("");
-  const fileRef = useRef<HTMLInputElement>(null);
-
-  const result = useMemo(() => calculateGradeability(inputs), [inputs]);
-  const set = (key: keyof CardInputs, value: number) =>
-    setInputs((prev) => ({ ...prev, [key]: value }));
-
-  // Only show score once analysis is fully complete and inputs are filled
-  const hasCard = uploadState === "done";
-  const displayScore = hasCard ? result.score : 0;
-
-  // Score ring math
-  const circumference = 2 * Math.PI * 52;
-  const dashOffset = hasCard
-    ? circumference - (displayScore / 100) * circumference
-    : circumference; // full offset = empty ring
-
-  const scoreColor =
-    !hasCard ? "#1e2b3d"
-    : displayScore >= 85 ? "#c9aa71"
-    : displayScore >= 65 ? "#22c55e"
-    : displayScore >= 40 ? "#f97316"
-    : "#ef4444";
-
-  // ── Animated fill ────────────────────────────────────────────────
-  const animateToTarget = useCallback((target: CardInputs) => {
-    const DURATION = 900;
-    const STEPS = 45;
-    const interval = DURATION / STEPS;
-    let step = 0;
-
-    const ticker = setInterval(() => {
-      step++;
-      const t = 1 - Math.pow(1 - step / STEPS, 3);
-
-      setInputs((prev) => {
-        const lerp = (a: number, b: number) => Math.round(a + (b - a) * t);
-        return {
-          rawCost:       lerp(prev.rawCost,       target.rawCost),
-          gradingFee:    lerp(prev.gradingFee,     target.gradingFee),
-          psa10Value:    lerp(prev.psa10Value,     target.psa10Value),
-          psa9Value:     lerp(prev.psa9Value,      target.psa9Value),
-          psa8Value:     lerp(prev.psa8Value,      target.psa8Value),
-          gemRate:       lerp(prev.gemRate,        target.gemRate),
-          nineRate:      lerp(prev.nineRate,       target.nineRate),
-          eightRate:     lerp(prev.eightRate,      target.eightRate),
-          popTotal:      lerp(prev.popTotal,       target.popTotal),
-          athleteDemand: lerp(prev.athleteDemand,  target.athleteDemand),
-          cardLiquidity: lerp(prev.cardLiquidity,  target.cardLiquidity),
-        };
-      });
-
-      if (step >= STEPS) clearInterval(ticker);
-    }, interval);
-  }, []);
-
-  // ── Upload / drag handlers ───────────────────────────────────────
-  const handleFile = useCallback((file: File) => {
-    if (!file.type.startsWith("image/")) return;
-    const url = URL.createObjectURL(file);
-    setCardImage(url);
-    setUploadState("analyzing");
-    setCardLabel(null);
-
-    // 2024 Panini Donruss Downtown! Caleb Williams #21 RC
-    // Source: GemRate player table (confirmed card-level, not set average)
-    const CALEB_WILLIAMS: CardInputs = {
-      rawCost:       680,   // avg raw sale
-      gradingFee:    25,    // PSA economy tier
-      psa10Value:    1368,  // avg; recent Fanatics sales $1,600–$1,750
-      psa9Value:     762,
-      psa8Value:     600,
-      gemRate:       44,    // 912 PSA 10s out of 2,075 graded — confirmed 44%
-      nineRate:      30,    // ~623 PSA 9s
-      eightRate:     12,    // ~249 PSA 8s
-      popTotal:      912,   // PSA 10 pop count
-      athleteDemand: 6,     // #1 pick 2024, rough rookie season — moderate
-      cardLiquidity: 7,     // large pop = more buyers, decent liquidity
-    };
-
-    setTimeout(() => {
-      const label = "2024 Panini Donruss Downtown! Caleb Williams #21 RC";
-      setCardLabel(label);
-      setUploadState("done");
-      animateToTarget(CALEB_WILLIAMS);
-
-      // Show summary panel after sliders finish animating (~1s delay)
-      setTimeout(() => {
-        const finalResult = calculateGradeability(CALEB_WILLIAMS);
-        const summary = buildSummary(label, CALEB_WILLIAMS, finalResult);
-        setSummaryText(summary);
-        setTypedText("");
-        setShowSummary(true);
-      }, 1100);
-    }, 2200);
-  }, [animateToTarget]);
-
-  // ── Typewriter effect ────────────────────────────────────────────
-  useEffect(() => {
-    if (!showSummary || !summaryText) return;
-    setTypedText("");
-    let i = 0;
-    const ticker = setInterval(() => {
-      i++;
-      setTypedText(summaryText.slice(0, i));
-      if (i >= summaryText.length) clearInterval(ticker);
-    }, 18);
-    return () => clearInterval(ticker);
-  }, [showSummary, summaryText]);
-
-  const onDrop = useCallback((e: React.DragEvent) => {
-    e.preventDefault();
-    setUploadState("idle");
-    const file = e.dataTransfer.files[0];
-    if (file) handleFile(file);
-  }, [handleFile]);
-
-  const onDragOver = (e: React.DragEvent) => { e.preventDefault(); setUploadState("dragging"); };
-  const onDragLeave = () => setUploadState("idle");
-  const onFileInput = (e: React.ChangeEvent<HTMLInputElement>) => {
-    const file = e.target.files?.[0];
-    if (file) handleFile(file);
-  };
+export default function Landing() {
+  const { val: profitVal, ref: profitRef } = useCounter(284600);
 
   return (
-    <div style={{ background: "#07090f", minHeight: "100vh" }}>
+    <div style={{ background: "#030e1e", color: "#f2ead8", fontFamily: "-apple-system, BlinkMacSystemFont, 'SF Pro Display', 'Segoe UI', sans-serif", overflowX: "hidden" }}>
 
-      {/* ── HEADER ──────────────────────────────────────────────── */}
-      <header style={{ borderBottom: "1px solid #16202e", background: "#07090f" }}>
-        <div className="max-w-6xl mx-auto px-6 py-4 flex items-center justify-between">
-          <div className="flex items-center gap-3">
-            <div style={{
-              width: 34, height: 34, borderRadius: 10,
-              background: "linear-gradient(135deg, #c9aa71, #e2c98a)",
-              display: "flex", alignItems: "center", justifyContent: "center",
-              fontWeight: 900, fontSize: 16, color: "#07090f"
-            }}>G</div>
-            <span style={{ fontWeight: 700, fontSize: 17, letterSpacing: "-0.3px", color: "#f5f2ec" }}>
-              Gradeability
-            </span>
-            <span style={{
-              fontSize: 10, fontWeight: 700, letterSpacing: "0.08em",
-              color: "#c9aa71", background: "rgba(201,170,113,0.1)",
-              border: "1px solid rgba(201,170,113,0.25)", borderRadius: 20, padding: "2px 8px"
-            }}>BETA</span>
+      {/* Ambient glow — gold center + ocean blue flanks */}
+      <div style={{ position: "fixed", top: "-10%", left: "50%", transform: "translateX(-50%)", width: 1200, height: 600, background: "radial-gradient(ellipse at center, rgba(201,170,113,0.07) 0%, transparent 55%)", pointerEvents: "none", zIndex: 0 }} />
+      <div style={{ position: "fixed", top: "10%", left: "0%", width: 600, height: 600, background: "radial-gradient(ellipse at center, rgba(20,90,180,0.12) 0%, transparent 70%)", pointerEvents: "none", zIndex: 0 }} />
+      <div style={{ position: "fixed", top: "10%", right: "0%", width: 600, height: 600, background: "radial-gradient(ellipse at center, rgba(20,90,180,0.12) 0%, transparent 70%)", pointerEvents: "none", zIndex: 0 }} />
+
+      {/* Alert bar */}
+      <div style={{ background: "#020c1a", borderBottom: "1px solid #1c3554", padding: "10px 0", overflow: "hidden", position: "relative", zIndex: 10 }}>
+        <div style={{ display: "flex", width: "max-content", animation: "alert-scroll 45s linear infinite" }}>
+          {[...ALERT_WINS, ...ALERT_WINS].map((w, i) => (
+            <div key={i} style={{ display: "flex", alignItems: "center", gap: 10, padding: "0 36px", whiteSpace: "nowrap", fontSize: 12 }}>
+              <span style={{ width: 6, height: 6, background: "#22c55e", borderRadius: "50%", flexShrink: 0, display: "inline-block" }} />
+              <span style={{ color: "#c9aa71", fontWeight: 600 }}>{w.user}</span>
+              <span style={{ color: "#2a4060" }}>just scored</span>
+              <span style={{ color: "#22c55e", fontWeight: 600 }}>{w.profit}</span>
+              <span style={{ color: "#2a4060" }}>on {w.card} {w.grade}</span>
+              <span style={{ color: "#1c3554", padding: "0 8px" }}>·</span>
+            </div>
+          ))}
+        </div>
+      </div>
+
+      <Nav />
+
+      {/* Hero */}
+      <div style={{ position: "relative", zIndex: 2, display: "flex", alignItems: "center", justifyContent: "space-between", gap: 60, padding: "80px 6% 70px", maxWidth: 1300, margin: "0 auto" }}>
+        <div style={{ maxWidth: 560 }}>
+          <div style={{ color: "#c8bfa8", fontSize: 11, letterSpacing: "0.22em", textTransform: "uppercase", marginBottom: 20, display: "flex", alignItems: "center", gap: 10 }}>
+            <span style={{ width: 24, height: 1, background: "#c8bfa8", display: "inline-block" }} />
+            Built for serious submitters
           </div>
-
-          <nav className="hidden md:flex gap-7" style={{ fontSize: 14, color: "#2e3d52" }}>
-            {["Calculator","Dashboard","Collection","Watchlist"].map((item, i) => (
-              <span key={item} style={{ cursor: "pointer", color: i === 0 ? "#c9aa71" : undefined }}
-                className="hover:text-white transition-colors">{item}</span>
+          <h1 style={{ fontWeight: 700, fontSize: "3rem", lineHeight: 1.12, letterSpacing: "-0.01em", marginBottom: 22, fontFamily: "var(--font-playfair), Georgia, serif" }}>
+            <span style={{ color: "#f2ead8" }}>Stop guessing.</span><br />
+            <span style={{ background: "linear-gradient(135deg, #e2c98a, #c9aa71)", WebkitBackgroundClip: "text", WebkitTextFillColor: "transparent" }}>
+              The money
+            </span>{" "}<span style={{ color: "#c8bfa8" }}>is in the math.</span>
+          </h1>
+          <p style={{ color: "#6b80a0", fontSize: "1.05rem", lineHeight: 1.72, marginBottom: 36 }}>
+            A weighted scoring engine built on real gem rates, market pricing, and downside protection. See the potential upside — and the floor — before the card ever leaves your hands.
+          </p>
+          <div style={{ display: "flex", gap: 14, marginBottom: 40, flexWrap: "wrap" }}>
+            <Link href="/score" style={{ background: "linear-gradient(135deg, #e2c98a, #c9aa71, #a88a50)", color: "#030e1e", fontWeight: 700, padding: "13px 28px", borderRadius: 4, textDecoration: "none", fontSize: 14, letterSpacing: "0.05em" }}>
+              Score My First Card Free →
+            </Link>
+            <a href="#how" style={{ color: "#c9aa71", background: "transparent", border: "1px solid #1c3554", fontWeight: 600, padding: "13px 28px", borderRadius: 4, textDecoration: "none", fontSize: 14 }}>
+              See How It Works
+            </a>
+          </div>
+          <div style={{ display: "flex", gap: 36 }}>
+            {[["$2,340", "Biggest single-card member win", true], ["89%", "Of high scores led to profitable grades", false], ["8", "Weighted factors in every score", false]].map(([num, label, isMoney], i) => (
+              <div key={i}>
+                <div style={{ fontFamily: "monospace", fontSize: isMoney ? "2rem" : "1.6rem", fontWeight: 900, color: isMoney ? "#22c55e" : "#c9aa71", textShadow: isMoney ? "0 0 24px rgba(34,197,94,0.4)" : "none" }}>{num as string}</div>
+                <div style={{ fontSize: 11, color: "#6b80a0", marginTop: 3 }}>{label as string}</div>
+              </div>
             ))}
-          </nav>
-
-          <button style={{
-            background: "linear-gradient(135deg, #c9aa71, #e2c98a)",
-            color: "#07090f", fontWeight: 700,
-            fontSize: 14, padding: "8px 20px", borderRadius: 100, border: "none", cursor: "pointer"
-          }}>
-            Get Started
-          </button>
-        </div>
-      </header>
-
-      {/* ── HERO ────────────────────────────────────────────────── */}
-      <div className="max-w-6xl mx-auto px-6 pt-10 pb-4">
-        <p style={{ fontSize: 12, fontWeight: 700, letterSpacing: "0.12em", color: "#2e3d52", marginBottom: 8 }}>
-          GRADEABILITY SCORE
-        </p>
-        <h1 style={{ fontSize: 32, fontWeight: 800, letterSpacing: "-0.5px", color: "#f5f2ec", marginBottom: 6 }}>
-          Should you grade this card?
-        </h1>
-        <p style={{ fontSize: 15, color: "#6b7a8d", maxWidth: 480 }}>
-          Upload a photo — we handle the rest. Get a score in seconds.
-        </p>
-      </div>
-
-      {/* ── MAIN GRID ───────────────────────────────────────────── */}
-      <div className="max-w-6xl mx-auto px-6 pb-16">
-        <div className="grid grid-cols-1 lg:grid-cols-5 gap-5">
-
-          {/* LEFT — Upload + Inputs (3 cols) */}
-          <div className="lg:col-span-3 flex flex-col gap-4">
-
-            {/* UPLOAD CARD */}
-            <Card>
-              <SectionLabel>Step 1 — Upload your card</SectionLabel>
-
-              <div
-                className={`drop-zone${uploadState === "dragging" ? " drag-over" : ""}`}
-                style={{ borderRadius: 14, padding: 24, cursor: "pointer", position: "relative" }}
-                onClick={() => fileRef.current?.click()}
-                onDrop={onDrop}
-                onDragOver={onDragOver}
-                onDragLeave={onDragLeave}
-              >
-                <input ref={fileRef} type="file" accept="image/*" style={{ display: "none" }} onChange={onFileInput} />
-
-                {uploadState === "idle" || uploadState === "dragging" ? (
-                  <div style={{ textAlign: "center", padding: "16px 0" }}>
-                    <div style={{ fontSize: 36, marginBottom: 10 }}>📸</div>
-                    <p style={{ color: "#f5f2ec", fontWeight: 600, fontSize: 15, marginBottom: 4 }}>
-                      Drop your card photo here
-                    </p>
-                    <p style={{ color: "#6b7a8d", fontSize: 13 }}>
-                      or tap to browse · JPG, PNG, HEIC
-                    </p>
-                    {uploadState === "dragging" && (
-                      <p style={{ color: "#c9aa71", fontSize: 13, marginTop: 8, fontWeight: 600 }}>Release to upload</p>
-                    )}
-                  </div>
-                ) : uploadState === "analyzing" ? (
-                  <div style={{ display: "flex", gap: 16, alignItems: "center" }}>
-                    {cardImage && (
-                      <img src={cardImage} alt="card" style={{ width: 72, height: 100, objectFit: "cover", borderRadius: 8, flexShrink: 0 }} />
-                    )}
-                    <div>
-                      <div style={{ display: "flex", alignItems: "center", gap: 8, marginBottom: 6 }}>
-                        <Spinner />
-                        <span style={{ color: "#c9aa71", fontWeight: 700, fontSize: 14 }}>Analyzing card…</span>
-                      </div>
-                      <p style={{ color: "#6b7a8d", fontSize: 13 }}>Reading player, year, set · Pulling PSA pop · Fetching market prices</p>
-                    </div>
-                  </div>
-                ) : (
-                  <div style={{ display: "flex", gap: 16, alignItems: "center" }} className="fade-in">
-                    {cardImage && (
-                      <img src={cardImage} alt="card" style={{ width: 72, height: 100, objectFit: "cover", borderRadius: 8, flexShrink: 0, border: "2px solid #c9aa71" }} />
-                    )}
-                    <div style={{ flex: 1 }}>
-                      <div style={{ display: "flex", alignItems: "center", gap: 6, marginBottom: 4 }}>
-                        <span style={{ color: "#22c55e", fontSize: 16 }}>✓</span>
-                        <span style={{ color: "#22c55e", fontWeight: 700, fontSize: 14 }}>Card identified</span>
-                      </div>
-                      <p style={{ color: "#f5f2ec", fontWeight: 600, fontSize: 14, marginBottom: 8 }}>{cardLabel}</p>
-                      <button
-                        onClick={(e) => { e.stopPropagation(); setUploadState("idle"); setCardImage(null); setCardLabel(null); setShowSummary(false); }}
-                        style={{ fontSize: 12, color: "#6b7a8d", background: "none", border: "none", cursor: "pointer", padding: 0, textDecoration: "underline" }}
-                      >
-                        Upload different card
-                      </button>
-                    </div>
-                    <div style={{ textAlign: "right" }}>
-                      <span style={{ fontSize: 11, color: "#c9aa71", fontWeight: 700, letterSpacing: "0.08em" }}>AUTO-FILLED</span>
-                    </div>
-                  </div>
-                )}
-              </div>
-
-              {uploadState !== "done" && (
-                <p style={{ fontSize: 12, color: "#2e3d52", textAlign: "center", marginTop: 12 }}>
-                  AI reads your card and fills everything below automatically
-                </p>
-              )}
-            </Card>
-
-            {/* FINANCIALS */}
-            <Card>
-              <SectionLabel>Step 2 — Confirm the numbers</SectionLabel>
-              <p style={{ fontSize: 12, color: "#2e3d52", marginBottom: 16, marginTop: -6 }}>These auto-fill from your card photo. Adjust if needed.</p>
-
-              <div className="grid grid-cols-3 gap-3 mb-4">
-                <NumberInput label="Raw Card Cost" prefix="$" value={inputs.rawCost} onChange={(v) => set("rawCost", v)} />
-                <NumberInput label="Grading Fee" prefix="$" value={inputs.gradingFee} onChange={(v) => set("gradingFee", v)} hint="PSA/BGS tier" />
-                <div>
-                  <FieldLabel>Total Cost</FieldLabel>
-                  <div style={{ background: "#07090f", border: "1px solid #16202e", borderRadius: 12, padding: "12px 14px" }}>
-                    <span style={{ fontWeight: 800, fontSize: 20, color: "#c9aa71" }}>
-                      ${(inputs.rawCost + inputs.gradingFee).toFixed(0)}
-                    </span>
-                  </div>
-                </div>
-              </div>
-
-              <div className="grid grid-cols-3 gap-3">
-                <NumberInput label="PSA 10 Value" prefix="$" value={inputs.psa10Value} onChange={(v) => set("psa10Value", v)} accent />
-                <NumberInput label="PSA 9 Value" prefix="$" value={inputs.psa9Value} onChange={(v) => set("psa9Value", v)} />
-                <NumberInput label="PSA 8 Value" prefix="$" value={inputs.psa8Value} onChange={(v) => set("psa8Value", v)} />
-              </div>
-            </Card>
-
-            {/* GRADING ODDS + MARKET */}
-            <Card>
-              <div className="grid grid-cols-1 md:grid-cols-2 gap-6">
-                <div>
-                  <SectionLabel>Grading Odds</SectionLabel>
-                  <div className="flex flex-col gap-4 mt-3">
-                    <SliderInput label="PSA 10 Gem Rate" value={inputs.gemRate} onChange={(v) => set("gemRate", v)} color="#c6f135" unit="%" max={90} />
-                    <SliderInput label="PSA 9 Rate" value={inputs.nineRate} onChange={(v) => set("nineRate", v)} color="#00d26a" unit="%" max={90} />
-                    <SliderInput label="PSA 8 Rate" value={inputs.eightRate} onChange={(v) => set("eightRate", v)} color="#ffb547" unit="%" max={80} />
-                  </div>
-                  <div style={{ marginTop: 12, background: "#07090f", border: "1px solid #16202e", borderRadius: 8, padding: "8px 12px", display: "flex", justifyContent: "space-between" }}>
-                    <span style={{ fontSize: 12, color: "#2e3d52" }}>Below PSA 8</span>
-                    <span style={{ fontSize: 12, fontWeight: 700, color: "#6b7a8d" }}>
-                      {Math.max(0, 100 - inputs.gemRate - inputs.nineRate - inputs.eightRate)}%
-                    </span>
-                  </div>
-                </div>
-                <div>
-                  <SectionLabel>Market Factors</SectionLabel>
-                  <div className="flex flex-col gap-4 mt-3">
-                    <NumberInput label="PSA 10 Pop Count" value={inputs.popTotal} onChange={(v) => set("popTotal", v)} hint="Total graded PSA 10s" />
-                    <SliderInput label="Athlete Demand" value={inputs.athleteDemand} onChange={(v) => set("athleteDemand", v)} color="#a78bfa" unit="/10" max={10} min={1} step={1} hint="1 = bench · 10 = all-time great" />
-                    <SliderInput label="Card Liquidity" value={inputs.cardLiquidity} onChange={(v) => set("cardLiquidity", v)} color="#60a5fa" unit="/10" max={10} min={1} step={1} hint="1 = hard sell · 10 = instant flip" />
-                  </div>
-                </div>
-              </div>
-            </Card>
-
-          </div>
-
-          {/* RIGHT — Score Panel (2 cols) */}
-          <div className="lg:col-span-2 flex flex-col gap-4">
-
-            {/* SCORE HERO */}
-            <div style={{
-              background: "#0c1018",
-              border: "1px solid #16202e",
-              borderRadius: 20,
-              padding: "32px 24px",
-              textAlign: "center",
-              position: "sticky",
-              top: 20
-            }}>
-              {/* Ring */}
-              <div style={{ display: "flex", justifyContent: "center", marginBottom: 20 }}>
-                <svg width="210" height="210" viewBox="0 0 160 160" className={hasCard ? "score-glow" : "ring-shimmer"} suppressHydrationWarning>
-                  {Array.from({ length: 20 }).map((_, i) => {
-                    const angle = (i / 20) * 360 - 90;
-                    const rad = (angle * Math.PI) / 180;
-                    const r1 = 70, r2 = 74;
-                    return (
-                      <line key={i}
-                        x1={parseFloat((80 + r1 * Math.cos(rad)).toFixed(2))}
-                        y1={parseFloat((80 + r1 * Math.sin(rad)).toFixed(2))}
-                        x2={parseFloat((80 + r2 * Math.cos(rad)).toFixed(2))}
-                        y2={parseFloat((80 + r2 * Math.sin(rad)).toFixed(2))}
-                        stroke="#16202e" strokeWidth="1.5"
-                      />
-                    );
-                  })}
-                  <circle cx="80" cy="80" r="52" fill="none" stroke={hasCard ? "#101820" : "rgba(201,170,113,0.15)"} strokeWidth="12" />
-                  <circle
-                    cx="80" cy="80" r="52"
-                    fill="none"
-                    stroke={hasCard ? scoreColor : "#c9aa71"}
-                    strokeWidth="12"
-                    strokeLinecap="round"
-                    strokeDasharray={circumference}
-                    strokeDashoffset={dashOffset}
-                    transform="rotate(-90 80 80)"
-                    style={{ transition: "stroke-dashoffset 0.7s cubic-bezier(.4,0,.2,1), stroke 0.4s ease" }}
-                  />
-                  {hasCard && <>
-                    <text x="80" y="88" textAnchor="middle" fontSize="38" fontWeight="900" fill={scoreColor}
-                      style={{ transition: "fill 0.4s ease", fontFamily: "-apple-system, sans-serif" }}>
-                      {result.score}
-                    </text>
-                  </>}
-                </svg>
-              </div>
-
-              {/* Verdict + stats — only shown after upload */}
-              {!hasCard ? (
-                <p style={{ fontSize: 13, color: "#c9aa71", marginBottom: 24, fontWeight: 600, letterSpacing: "0.03em", textShadow: "0 0 12px rgba(201,170,113,0.4)" }}>Upload a card to see your score</p>
-              ) : (
-                <div>
-                  <div style={{
-                    display: "inline-block",
-                    background: `${scoreColor}18`,
-                    border: `1px solid ${scoreColor}35`,
-                    borderRadius: 100,
-                    padding: "6px 20px",
-                    marginBottom: 24
-                  }}>
-                    <span style={{ fontSize: 15, fontWeight: 900, letterSpacing: "0.12em", color: scoreColor }}>
-                      {result.verdict}
-                    </span>
-                  </div>
-
-                  <div className="grid grid-cols-2 gap-2 mb-6">
-                    {[
-                      { label: "Expected ROI", value: `${result.expectedROI >= 0 ? "+" : ""}${result.expectedROI.toFixed(0)}%`, color: result.expectedROI >= 0 ? "#22c55e" : "#ef4444" },
-                      { label: "Exp. Profit", value: `${result.expectedProfit >= 0 ? "+$" : "-$"}${Math.abs(result.expectedProfit).toFixed(0)}`, color: result.expectedProfit >= 0 ? "#22c55e" : "#ef4444" },
-                      { label: "Break-Even", value: result.breakEvenGrade, color: "#6b7a8d" },
-                      { label: "Risk", value: result.riskLevel, color: result.riskLevel === "LOW" ? "#22c55e" : result.riskLevel === "MEDIUM" ? "#f59e0b" : result.riskLevel === "HIGH" ? "#e07040" : "#ef4444" },
-                    ].map(({ label, value, color }) => (
-                      <div key={label} style={{ background: "#07090f", border: "1px solid #16202e", borderRadius: 12, padding: "12px 14px", textAlign: "left" }}>
-                        <div style={{ fontSize: 11, color: "#2e3d52", marginBottom: 4, fontWeight: 600, letterSpacing: "0.04em" }}>{label.toUpperCase()}</div>
-                        <div style={{ fontSize: 15, fontWeight: 800, color }}>{value}</div>
-                      </div>
-                    ))}
-                  </div>
-
-                  <div style={{ borderTop: "1px solid #16202e", paddingTop: 20 }}>
-                    <p style={{ fontSize: 11, fontWeight: 700, letterSpacing: "0.1em", color: "#2e3d52", marginBottom: 14, textAlign: "left" }}>FACTOR BREAKDOWN</p>
-                    <div className="flex flex-col gap-3">
-                      {result.factorScores.filter(f => f.name !== "Population Control").map((f) => {
-                        const barColor = f.score >= 70 ? "#c9aa71" : f.score >= 45 ? "#f59e0b" : "#ef4444";
-                        const tooltips: Record<string, string> = {
-                          "ROI Potential": "Expected return on your total investment (card cost + grading fee). The single biggest driver of your score at 28% weight.",
-                          "PSA 10 Premium": "How much more a PSA 10 is worth vs. the raw card. A higher premium means grading unlocks serious value. Counts for 20%.",
-                          "Gem Rate (PSA 10%)": "Your estimated chance of pulling a PSA 10. Higher odds = less risk. Weighted at 17% — the second biggest swing factor.",
-                          "Athlete Demand": "How hot is this player right now? Hype drives buyers and keeps prices up. Worth 15% of your score.",
-                          "Grading Cost Efficiency": "The grading fee as a share of your expected payout. Cheaper relative to value = better. Counts for 8%.",
-                          "Downside Protection": "If the card only grades a PSA 8, do you still come out ahead? Measures your floor. Worth 7%.",
-                          "Market Liquidity": "How fast and easy is it to sell this card once graded? Illiquid cards tie up your money. Worth 5%.",
-                        };
-                        return (
-                          <div key={f.name}>
-                            <div style={{ display: "flex", justifyContent: "space-between", marginBottom: 4 }}>
-                              <div style={{ display: "flex", alignItems: "center", gap: 5 }}>
-                                <span style={{ fontSize: 11, color: "#6b7a8d" }}>{f.name}</span>
-                                <FactorTooltip text={tooltips[f.name]} />
-                              </div>
-                              <div style={{ display: "flex", gap: 6 }}>
-                                <span style={{ fontSize: 11, color: "#2e3d52" }}>{f.weight}%</span>
-                                <span style={{ fontSize: 11, fontWeight: 700, color: barColor }}>{f.score.toFixed(0)}</span>
-                              </div>
-                            </div>
-                            <div style={{ height: 3, background: "#16202e", borderRadius: 2, overflow: "hidden" }}>
-                              <div style={{ height: "100%", width: `${f.score}%`, background: barColor, borderRadius: 2, transition: "width 0.6s cubic-bezier(.4,0,.2,1)" }} />
-                            </div>
-                          </div>
-                        );
-                      })}
-                    </div>
-                    <div style={{ display: "flex", justifyContent: "space-between", marginTop: 16, paddingTop: 14, borderTop: "1px solid #16202e" }}>
-                      <span style={{ fontSize: 12, fontWeight: 700, color: "#2e3d52", letterSpacing: "0.08em" }}>TOTAL</span>
-                      <span style={{ fontSize: 18, fontWeight: 900, color: scoreColor }}>{result.score}/100</span>
-                    </div>
-                  </div>
-                </div>
-              )}
-            </div>
-
           </div>
         </div>
 
-        {/* ── AI SUMMARY PANEL ──────────────────────────────────── */}
-        {showSummary && (
-          <div className="fade-in" style={{ marginTop: 20 }}>
-            <div style={{
-              background: "#0c1018",
-              border: "1px solid #16202e",
-              borderRadius: 20,
-              padding: "24px 28px",
-              position: "relative",
-              overflow: "hidden",
-            }}>
-              {/* Accent bar */}
-              <div style={{
-                position: "absolute", top: 0, left: 0, right: 0, height: 2,
-                background: `linear-gradient(90deg, #c9aa71, transparent)`
-              }} />
-
-              <div style={{ display: "flex", alignItems: "center", gap: 10, marginBottom: 16 }}>
-                <div style={{
-                  width: 28, height: 28, borderRadius: 8,
-                  background: "rgba(201,170,113,0.1)", border: "1px solid rgba(201,170,113,0.2)",
-                  display: "flex", alignItems: "center", justifyContent: "center", fontSize: 14
-                }}>✦</div>
-                <div>
-                  <p style={{ fontSize: 11, fontWeight: 700, letterSpacing: "0.1em", color: "#6b7a8d", marginBottom: 1 }}>AI ANALYSIS</p>
-                  <p style={{ fontSize: 12, color: "#2e3d52" }}>{cardLabel}</p>
-                </div>
-                <div style={{ marginLeft: "auto" }}>
-                  <span style={{
-                    fontSize: 11, fontWeight: 800, letterSpacing: "0.08em",
-                    color: scoreColor,
-                    background: `${scoreColor}15`,
-                    border: `1px solid ${scoreColor}30`,
-                    borderRadius: 100, padding: "3px 10px"
-                  }}>{result.verdict}</span>
-                </div>
+        {/* Slab stack */}
+        <div style={{ position: "relative", flexShrink: 0, width: 380, height: 380 }}>
+          {[
+            { left: 0, top: 40, rotate: -6, z: 1, score: 83, profit: "+$1,840", name: "2017 Prizm Mahomes RC" },
+            { left: 85, top: 10, rotate: 0, z: 3, score: 91, profit: "+$4,200", name: "2003 Topps Chrome LeBron RC" },
+            { left: 170, top: 50, rotate: 6, z: 2, score: 78, profit: "+$2,100", name: "2018 Bowman Chrome Ohtani" },
+          ].map((s, i) => (
+            <div key={i} style={{ position: "absolute", left: s.left, top: s.top, zIndex: s.z, width: 210, height: 300, borderRadius: 6, background: "linear-gradient(160deg, #061628, #030e1e)", border: "1.5px solid #264a70", boxShadow: "0 24px 60px rgba(0,0,0,0.7), 0 0 40px rgba(201,170,113,0.06)", transform: `rotate(${s.rotate}deg)`, transition: "transform 0.4s, box-shadow 0.4s", overflow: "hidden", cursor: "pointer" }}
+              onMouseEnter={e => { (e.currentTarget as HTMLElement).style.transform = `rotate(${s.rotate}deg) scale(1.04) translateY(-4px)`; }}
+              onMouseLeave={e => { (e.currentTarget as HTMLElement).style.transform = `rotate(${s.rotate}deg)`; }}>
+              <div style={{ width: "100%", height: 190, background: "linear-gradient(160deg, #0e2040 0%, #06122a 100%)", display: "flex", alignItems: "center", justifyContent: "center", fontSize: "2.5rem", borderBottom: "1px solid #1c3554", position: "relative", overflow: "hidden" }}>
+                {["🏈", "🏀", "⚾"][i]}
+                <div style={{ position: "absolute", inset: 0, background: "linear-gradient(135deg, transparent, rgba(201,170,113,0.1), transparent)", animation: "holo-shimmer 3s ease-in-out infinite" }} />
               </div>
-
-              <p style={{
-                fontSize: 15, lineHeight: 1.75, color: "#c8c4bc",
-                fontWeight: 400, maxWidth: 860,
-              }}>
-                {typedText}
-                <span style={{
-                  display: "inline-block", width: 2, height: "1em",
-                  background: "#c9aa71", marginLeft: 2, verticalAlign: "text-bottom",
-                  opacity: typedText.length < summaryText.length ? 1 : 0,
-                  animation: "blink 0.7s step-end infinite"
-                }} />
-              </p>
-
-              <style>{`@keyframes blink { 0%,100%{opacity:1} 50%{opacity:0} }`}</style>
-
-              <div style={{ marginTop: 18, display: "flex", gap: 8, flexWrap: "wrap" }}>
-                {[
-                  { label: "Gem Rate", value: `${inputs.gemRate}%`, warn: inputs.gemRate < 20 },
-                  { label: "PSA 10 Value", value: `$${inputs.psa10Value.toLocaleString()}` },
-                  { label: "All-In Cost", value: `$${(inputs.rawCost + inputs.gradingFee).toLocaleString()}` },
-                  { label: "Expected ROI", value: `${result.expectedROI >= 0 ? "+" : ""}${result.expectedROI.toFixed(0)}%`, warn: result.expectedROI < 0 },
-                  { label: "Break-Even", value: result.breakEvenGrade },
-                ].map(({ label, value, warn }) => (
-                  <div key={label} style={{
-                    fontSize: 12, padding: "5px 12px", borderRadius: 100,
-                    background: warn ? "rgba(239,68,68,0.08)" : "#0f1520",
-                    border: `1px solid ${warn ? "rgba(239,68,68,0.2)" : "#1e2b3d"}`,
-                    color: warn ? "#ef4444" : "#6b7a8d",
-                  }}>
-                    <span style={{ color: "#2e3d52" }}>{label}: </span>
-                    <span style={{ fontWeight: 700 }}>{value}</span>
-                  </div>
-                ))}
+              <div style={{ padding: "10px 12px 8px" }}>
+                <div style={{ background: "#c9aa71", color: "#030e1e", fontSize: 10, fontWeight: 700, display: "inline-block", padding: "2px 7px", borderRadius: 2, letterSpacing: "0.06em", marginBottom: 6 }}>PSA 10</div>
+                <div style={{ fontSize: 11, color: "#f2ead8", lineHeight: 1.3, fontWeight: 500, marginBottom: 4 }}>{s.name}</div>
+                <div style={{ display: "flex", alignItems: "baseline", gap: 4 }}>
+                  <span style={{ fontFamily: "monospace", fontSize: "1.1rem", fontWeight: 700, color: "#c9aa71" }}>{s.score}</span>
+                  <span style={{ fontFamily: "monospace", fontSize: 10, color: "#6b80a0" }}>/100</span>
+                </div>
+                <div style={{ fontFamily: "monospace", fontSize: "1.05rem", fontWeight: 800, color: "#22c55e", textShadow: "0 0 14px rgba(34,197,94,0.5)", marginTop: 2 }}>{s.profit}</div>
               </div>
             </div>
-          </div>
-        )}
-
-      </div>
-
-    </div>
-  );
-}
-
-// ── Helper components ────────────────────────────────────────────
-
-function Card({ children }: { children: React.ReactNode }) {
-  return (
-    <div style={{ background: "#0c1018", border: "1px solid #16202e", borderRadius: 20, padding: "20px 22px" }}>
-      {children}
-    </div>
-  );
-}
-
-function SectionLabel({ children }: { children: React.ReactNode }) {
-  return <p style={{ fontSize: 11, fontWeight: 700, letterSpacing: "0.1em", color: "#6b7a8d", marginBottom: 14 }}>{children}</p>;
-}
-
-function FieldLabel({ children }: { children: React.ReactNode }) {
-  return <p style={{ fontSize: 11, color: "#6b7a8d", fontWeight: 600, marginBottom: 6 }}>{children}</p>;
-}
-
-function FactorTooltip({ text }: { text: string }) {
-  const [visible, setVisible] = useState(false);
-  return (
-    <div style={{ position: "relative", display: "inline-flex" }}>
-      <span
-        onMouseEnter={() => setVisible(true)}
-        onMouseLeave={() => setVisible(false)}
-        style={{ width: 13, height: 13, borderRadius: "50%", background: "#16202e", border: "1px solid #2e3d52", display: "flex", alignItems: "center", justifyContent: "center", fontSize: 9, color: "#6b7a8d", cursor: "default", flexShrink: 0 }}
-      >i</span>
-      {visible && (
-        <div style={{ position: "absolute", left: "50%", bottom: "calc(100% + 6px)", transform: "translateX(-50%)", background: "#0c1018", border: "1px solid #1e2b3d", borderRadius: 8, padding: "8px 10px", width: 200, fontSize: 11, color: "#c8c4bc", lineHeight: 1.5, zIndex: 50, pointerEvents: "none" }}>
-          {text}
+          ))}
         </div>
-      )}
-    </div>
-  );
-}
-
-function NumberInput({ label, value, onChange, prefix, min = 0, max = 999999, step = 1, hint, accent }: {
-  label: string; value: number; onChange: (v: number) => void;
-  prefix?: string; min?: number; max?: number; step?: number; hint?: string; accent?: boolean;
-}) {
-  const [display, setDisplay] = useState(value === 0 ? "" : String(value));
-  useEffect(() => {
-    setDisplay(value === 0 ? "" : String(value));
-  }, [value]);
-  return (
-    <div>
-      <FieldLabel>{label}</FieldLabel>
-      <div style={{
-        display: "flex", alignItems: "center",
-        background: "#101520",
-        border: `1px solid ${accent ? "rgba(201,170,113,0.3)" : "#1e2b3d"}`,
-        borderRadius: 12,
-        overflow: "hidden",
-      }}>
-        {prefix && <span style={{ paddingLeft: 12, color: "#2e3d52", fontSize: 14 }}>{prefix}</span>}
-        <input
-          type="number" value={display} min={min} max={max} step={step}
-          onChange={(e) => setDisplay(e.target.value)}
-          onBlur={(e) => {
-            const num = Math.max(min, Math.min(max, Number(e.target.value) || 0));
-            onChange(num);
-            setDisplay(num === 0 ? "" : String(num));
-          }}
-          style={{ flex: 1, background: "transparent", border: "none", outline: "none", padding: "11px 12px", fontSize: 14, fontWeight: 700, color: "#f5f2ec" }}
-        />
       </div>
-      {hint && <p style={{ fontSize: 11, color: "#2e3d52", marginTop: 4 }}>{hint}</p>}
-    </div>
-  );
-}
 
-function SliderInput({ label, value, onChange, color, unit, max = 100, min = 0, step = 1, hint }: {
-  label: string; value: number; onChange: (v: number) => void;
-  color: string; unit: string; max?: number; min?: number; step?: number; hint?: string;
-}) {
-  return (
-    <div>
-      <div style={{ display: "flex", justifyContent: "space-between", marginBottom: 6 }}>
-        <span style={{ fontSize: 12, color: "#6b7a8d" }}>{label}</span>
-        <span style={{ fontSize: 13, fontWeight: 800, color }}>{value}{unit}</span>
+      {/* Ticker */}
+      <div style={{ position: "relative", zIndex: 2, borderTop: "1px solid #1c3554", borderBottom: "1px solid #1c3554", background: "rgba(201,170,113,0.03)", padding: "20px 0" }}>
+        <div style={{ textAlign: "center", fontSize: 10, letterSpacing: "0.15em", textTransform: "uppercase", color: "#6b80a0", marginBottom: 14, display: "flex", alignItems: "center", justifyContent: "center", gap: 8 }}>
+          <span style={{ width: 5, height: 5, background: "#22c55e", borderRadius: "50%", display: "inline-block", animation: "pulse-dot 2s ease-in-out infinite" }} />
+          Live member wins · updated in real time
+        </div>
+        <div style={{ overflow: "hidden", maskImage: "linear-gradient(90deg, transparent, black 6%, black 94%, transparent)" }}>
+          <div style={{ display: "flex", gap: 14, width: "max-content", animation: "ticker-scroll 50s linear infinite" }}>
+            {[...TICKER_ITEMS, ...TICKER_ITEMS].map((t, i) => (
+              <div key={i} style={{ flexShrink: 0, display: "flex", alignItems: "center", gap: 12, background: "#061628", border: "1px solid #1c3554", borderRadius: 3, padding: "10px 16px", whiteSpace: "nowrap" }}>
+                <span style={{ fontFamily: "monospace", fontSize: 11, color: t.type === "win" ? "#030e1e" : "#f2ead8", background: t.type === "win" ? "#22c55e" : "#c9aa71", padding: "2px 6px", borderRadius: 2, fontWeight: 700 }}>
+                  {t.type === "win" ? "WIN" : "PSA 10"}
+                </span>
+                <span style={{ fontSize: 13 }}>{t.type === "win" ? `${(t as typeof TICKER_ITEMS[0] & {user:string}).user} · ${t.card}` : t.card}</span>
+                <span style={{ fontFamily: "monospace", fontSize: 13, color: t.type === "win" ? "#22c55e" : "#c9aa71", fontWeight: 700 }}>
+                  {t.type === "win" ? (t as typeof TICKER_ITEMS[0] & {profit:string}).profit : (t as typeof TICKER_ITEMS[1] & {price:string}).price}
+                </span>
+              </div>
+            ))}
+          </div>
+        </div>
       </div>
-      <input type="range" min={min} max={max} step={step} value={value}
-        onChange={(e) => onChange(Number(e.target.value))}
-        style={{ accentColor: color }} />
-      {hint && <p style={{ fontSize: 11, color: "#2e3d52", marginTop: 2 }}>{hint}</p>}
+
+      {/* Sapphire stripe */}
+      <div style={{ height: 1, background: "linear-gradient(90deg, transparent, #3a8fd4 30%, #3a8fd4 70%, transparent)", opacity: 0.4, position: "relative", zIndex: 2 }} />
+
+      {/* Stats band */}
+      <div ref={profitRef} style={{ position: "relative", zIndex: 2, borderBottom: "1px solid #1c3554", background: "rgba(201,170,113,0.02)", padding: "50px 6%", display: "flex", justifyContent: "center", gap: 80, flexWrap: "wrap" }}>
+        {[
+          ["$" + profitVal.toLocaleString(), "In member-reported profits", true],
+          ["4,200+", "Cards scored to date", false],
+          ["83%", "Of scores matched actual grade range", false],
+          ["$25", "Avg saved per submission avoided", false],
+        ].map(([num, label, isMoney], i) => (
+          <div key={i} style={{ textAlign: "center" }}>
+            <div style={{ fontFamily: "monospace", fontSize: isMoney ? "2.8rem" : "2.4rem", fontWeight: 900, color: isMoney ? "#22c55e" : "#c9aa71", textShadow: isMoney ? "0 0 32px rgba(34,197,94,0.35)" : "none" }}>{num as string}</div>
+            <div style={{ fontSize: 11, color: "#6b80a0", marginTop: 6, letterSpacing: "0.04em", textTransform: "uppercase" }}>{label as string}</div>
+          </div>
+        ))}
+      </div>
+
+      {/* Wins */}
+      <section id="wins" style={{ position: "relative", zIndex: 2, padding: "90px 6%", maxWidth: 1300, margin: "0 auto" }}>
+        {/* Green money glow behind wins */}
+        <div style={{ position: "absolute", top: "30%", left: "50%", transform: "translateX(-50%)", width: 900, height: 400, background: "radial-gradient(ellipse at center, rgba(34,197,94,0.05) 0%, transparent 65%)", pointerEvents: "none" }} />
+        <div style={{ textAlign: "center", maxWidth: 620, margin: "0 auto 56px" }}>
+          <div style={{ color: "#c8bfa8", fontSize: 11, letterSpacing: "0.22em", textTransform: "uppercase", marginBottom: 16 }}>Recent Wins</div>
+          <h2 style={{ fontWeight: 700, fontSize: "2rem", letterSpacing: "-0.01em", fontFamily: "var(--font-playfair), Georgia, serif", marginBottom: 14 }}>What the data looked like before they shipped.</h2>
+          <p style={{ color: "#6b80a0", lineHeight: 1.72 }}>Real cards. Real scores. What happened after — member-reported. Past performance doesn&apos;t predict future results, but the math doesn&apos;t lie.</p>
+        </div>
+        <div style={{ display: "grid", gridTemplateColumns: "repeat(3, 1fr)", gap: 20 }}>
+          {WINS.map((w, i) => (
+            <div key={i} style={{
+              background: i === 1 ? "linear-gradient(160deg, rgba(242,234,216,0.06) 0%, rgba(242,234,216,0.02) 100%)" : "#061628",
+              border: i === 1 ? "1px solid rgba(242,234,216,0.2)" : "1px solid #1c3554",
+              borderRadius: 6, padding: "26px 24px", position: "relative", overflow: "hidden",
+              boxShadow: i === 1 ? "0 0 40px rgba(242,234,216,0.04), inset 0 1px 0 rgba(242,234,216,0.1)" : "none",
+            }}>
+              <div style={{ position: "absolute", top: 0, left: 0, right: 0, height: 2, background: i === 1 ? "linear-gradient(90deg, transparent, #f2ead8, transparent)" : "linear-gradient(90deg, #c9aa71, #f2ead8, #c9aa71)" }} />
+              <div style={{ marginBottom: 16 }}>
+                <div style={{ fontFamily: "monospace", fontSize: "2.4rem", fontWeight: 900, color: "#22c55e", textShadow: "0 0 28px rgba(34,197,94,0.45)", lineHeight: 1 }}>{w.profit}</div>
+                <div style={{ fontSize: 10, color: "#22c55e", opacity: 0.6, letterSpacing: "0.1em", textTransform: "uppercase", marginTop: 4 }}>REPORTED PROFIT</div>
+                <div style={{ marginTop: 10, fontWeight: 600, fontSize: 14 }}>{w.user}</div>
+                <div style={{ fontSize: 11, color: "#6b80a0", marginTop: 2 }}>{w.location}</div>
+              </div>
+              <p style={{ color: "rgba(242,234,216,0.55)", fontSize: 13, lineHeight: 1.6, fontStyle: "italic", marginBottom: 14 }}>&ldquo;{w.quote}&rdquo;</p>
+              <div style={{ fontSize: 11, color: "rgba(201,170,113,0.6)", fontFamily: "monospace" }}>{w.card}</div>
+            </div>
+          ))}
+        </div>
+      </section>
+
+      {/* Sapphire stripe */}
+      <div style={{ height: 1, background: "linear-gradient(90deg, transparent, #3a8fd4 30%, #3a8fd4 70%, transparent)", opacity: 0.4, position: "relative", zIndex: 2 }} />
+
+      {/* How it works */}
+      <section id="how" style={{ position: "relative", zIndex: 2, padding: "0 6% 90px", maxWidth: 1300, margin: "0 auto" }}>
+        <div style={{ textAlign: "center", maxWidth: 620, margin: "0 auto 56px" }}>
+          <div style={{ color: "#c9aa71", fontSize: 11, letterSpacing: "0.18em", textTransform: "uppercase", marginBottom: 16 }}>How it works</div>
+          <h2 style={{ fontWeight: 700, fontSize: "2rem", letterSpacing: "-0.01em", fontFamily: "var(--font-playfair), Georgia, serif", marginBottom: 14 }}>Three steps. No spreadsheets.</h2>
+          <p style={{ color: "#6b80a0", lineHeight: 1.72 }}>Everything that used to take 45 minutes of tab-switching — condensed into one score you can act on immediately.</p>
+        </div>
+        <div style={{ display: "flex" }}>
+          {[
+            ["01", "Upload the card", "Take a photo or drag an image in. Player name, set, year — we read it from the card automatically."],
+            ["02", "We pull the numbers", "Current pricing, gem rate history, population, demand signals, and market direction — all sourced, all transparent."],
+            ["03", "Ship with confidence", "A 0–100 score with full reasoning. Know your expected ROI, your worst case, and exactly where the opportunity is — before the card leaves your hands."],
+          ].map(([num, title, desc], i) => (
+            <div key={i} style={{ flex: 1, padding: "36px 32px", borderLeft: i === 0 ? "none" : "1px solid #1c3554", paddingLeft: i === 0 ? 0 : 32 }}>
+              <div style={{ fontWeight: 700, fontSize: "2.4rem", color: "#3a8fd4", marginBottom: 16, fontFamily: "monospace", textShadow: "0 0 20px rgba(58,143,212,0.35)" }}>{num}</div>
+              <h3 style={{ fontSize: "1.05rem", marginBottom: 10, fontWeight: 600, fontFamily: "var(--font-playfair), Georgia, serif" }}>{title}</h3>
+              <p style={{ color: "#6b80a0", fontSize: 14, lineHeight: 1.65 }}>{desc}</p>
+            </div>
+          ))}
+        </div>
+      </section>
+
+      {/* Try it */}
+      <section id="try" style={{ position: "relative", zIndex: 2, padding: "60px 6% 70px", margin: "0 5% 80px", textAlign: "center", borderRadius: 12, background: "linear-gradient(160deg, rgba(242,234,216,0.05) 0%, rgba(242,234,216,0.02) 100%)", border: "1px solid rgba(242,234,216,0.12)", boxShadow: "inset 0 1px 0 rgba(242,234,216,0.08)" }}>
+        <div style={{ color: "#c8bfa8", fontSize: 11, letterSpacing: "0.22em", textTransform: "uppercase", marginBottom: 16 }}>Try it yourself</div>
+        <h2 style={{ fontWeight: 700, fontSize: "2rem", letterSpacing: "-0.01em", fontFamily: "var(--font-playfair), Georgia, serif", marginBottom: 14, color: "#f2ead8" }}>Your first score, on us.</h2>
+        <p style={{ color: "#6b80a0", lineHeight: 1.72, marginBottom: 36 }}>Upload a card photo and get a real score in under 10 seconds.</p>
+        <Link href="/score" style={{ background: "linear-gradient(135deg, #e2c98a, #c9aa71, #a88a50)", color: "#030e1e", fontWeight: 700, padding: "16px 40px", borderRadius: 4, textDecoration: "none", fontSize: 16, letterSpacing: "0.05em", display: "inline-block" }}>
+          Open the Scorer →
+        </Link>
+      </section>
+
+      {/* Features */}
+      <section id="features" style={{ position: "relative", zIndex: 2, padding: "0 6% 90px", maxWidth: 1300, margin: "0 auto" }}>
+        <div style={{ textAlign: "center", maxWidth: 620, margin: "0 auto 56px" }}>
+          <div style={{ color: "#c9aa71", fontSize: 11, letterSpacing: "0.18em", textTransform: "uppercase", marginBottom: 16 }}>What makes it different</div>
+          <h2 style={{ fontWeight: 700, fontSize: "2rem", letterSpacing: "-0.01em", fontFamily: "var(--font-playfair), Georgia, serif" }}>Built on priorities, not guesswork.</h2>
+        </div>
+        <div style={{ display: "grid", gridTemplateColumns: "repeat(3, 1fr)", gap: 20 }}>
+          {[
+            ["001", "Weighted to how you think", "8 factors, prioritized the way experienced graders actually prioritize them — gem rate and ROI dominate, population barely moves the needle."],
+            ["002", "Downside built in", "Every score accounts for the PSA 8 scenario. We show you the worst case before you decide — not after the bill arrives."],
+            ["003", "Full transparency", "Every score expands into the complete math. What was sourced, what was estimated, and exactly how each factor pulled the number up or down."],
+          ].map(([num, title, desc], i) => (
+            <div key={i} style={{ background: "#061628", border: "1px solid #1c3554", borderRadius: 6, padding: "30px 26px" }}>
+              <div style={{ fontFamily: "monospace", color: "#c9aa71", fontSize: 12, marginBottom: 16, opacity: 0.6 }}>{num}</div>
+              <h3 style={{ fontSize: "1.05rem", marginBottom: 10, fontWeight: 600, fontFamily: "var(--font-playfair), Georgia, serif" }}>{title}</h3>
+              <p style={{ color: "#6b80a0", fontSize: 13, lineHeight: 1.65 }}>{desc}</p>
+            </div>
+          ))}
+        </div>
+      </section>
+
+      {/* CTA band */}
+      <div style={{ position: "relative", zIndex: 2, textAlign: "center", padding: "90px 6%", borderTop: "1px solid #1c3554", background: "radial-gradient(ellipse at 50% 0%, rgba(201,170,113,0.05), transparent 60%)" }}>
+        <div style={{ display: "inline-block", fontSize: 10, letterSpacing: "0.1em", textTransform: "uppercase", color: "#c9aa71", border: "1px solid #1c3554", padding: "5px 14px", borderRadius: 20, marginBottom: 20 }}>Coming Soon</div>
+        <h2 style={{ fontWeight: 700, fontSize: "2.2rem", marginBottom: 16, fontFamily: "var(--font-playfair), Georgia, serif" }}>A private table for people who grade to profit.</h2>
+        <p style={{ color: "#6b80a0", marginBottom: 36, maxWidth: 480, margin: "0 auto 36px", lineHeight: 1.7 }}>Members-only Discord with verified independent graders, a monthly newsletter on the top grading opportunities right now, and insights you won&apos;t find in public forums.</p>
+        <a href="#waitlist" style={{ background: "linear-gradient(135deg, #e2c98a, #c9aa71, #a88a50)", color: "#030e1e", fontWeight: 700, padding: "13px 28px", borderRadius: 4, textDecoration: "none", fontSize: 14, letterSpacing: "0.05em" }}>Get Notified When It Opens</a>
+      </div>
+
+      {/* Waitlist */}
+      <section id="waitlist" style={{ position: "relative", zIndex: 2, padding: "90px 6%", maxWidth: 900, margin: "0 auto", textAlign: "center" }}>
+        <div style={{ color: "#c9aa71", fontSize: 11, letterSpacing: "0.18em", textTransform: "uppercase", marginBottom: 16 }}>Early Access</div>
+        <h2 style={{ fontWeight: 700, fontSize: "2rem", letterSpacing: "-0.01em", fontFamily: "var(--font-playfair), Georgia, serif", marginBottom: 14 }}>The edge is available right now.</h2>
+        <p style={{ color: "#6b80a0", lineHeight: 1.72, marginBottom: 36 }}>Private beta is open to a small group. Get on the list to be first when access widens — and lock in the founding rate.</p>
+        <WaitlistForm />
+      </section>
+
+      <Footer />
+
+      <style>{`
+        @keyframes alert-scroll { from { transform: translateX(0); } to { transform: translateX(-50%); } }
+        @keyframes ticker-scroll { from { transform: translateX(0); } to { transform: translateX(-50%); } }
+        @keyframes pulse-dot { 0%,100% { opacity:1; } 50% { opacity:0.4; } }
+        @keyframes holo-shimmer { 0% { transform: translateX(-100%) skewX(-15deg); } 100% { transform: translateX(300%) skewX(-15deg); } }
+      `}</style>
     </div>
   );
 }
 
-function Spinner() {
-  return (
-    <svg width="16" height="16" viewBox="0 0 16 16" style={{ animation: "spin 0.8s linear infinite" }}>
-      <style>{`@keyframes spin { to { transform: rotate(360deg); } }`}</style>
-      <circle cx="8" cy="8" r="6" fill="none" stroke="#c9aa71" strokeWidth="2" strokeDasharray="20" strokeDashoffset="10" strokeLinecap="round" />
-    </svg>
+function WaitlistForm() {
+  const [email, setEmail] = useState("");
+  const [done, setDone] = useState(false);
+  return done ? (
+    <p style={{ color: "#c9aa71", fontSize: 14 }}>✓ You&apos;re on the list. We&apos;ll reach out within 24 hours.</p>
+  ) : (
+    <div style={{ maxWidth: 460, margin: "0 auto", display: "flex", gap: 12 }}>
+      <input type="email" value={email} onChange={e => setEmail(e.target.value)} placeholder="your@email.com"
+        style={{ flex: 1, background: "#061628", border: "1px solid #1c3554", color: "#f2ead8", padding: "14px 18px", borderRadius: 4, fontSize: 14, fontFamily: "inherit", outline: "none" }}
+        onFocus={e => (e.target.style.borderColor = "#c9aa71")}
+        onBlur={e => (e.target.style.borderColor = "#1c3554")} />
+      <button onClick={() => { if (email.includes("@")) setDone(true); }}
+        style={{ background: "linear-gradient(135deg, #e2c98a, #c9aa71, #a88a50)", color: "#030e1e", fontWeight: 700, padding: "14px 24px", borderRadius: 4, border: "none", cursor: "pointer", fontSize: 14, letterSpacing: "0.05em" }}>
+        Join →
+      </button>
+    </div>
   );
 }

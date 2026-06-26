@@ -1,25 +1,29 @@
 @import "tailwindcss";
 
 :root {
-  --bg:         #07090f;
-  --bg-card:    #0c1018;
-  --bg-input:   #101520;
-  --bg-hover:   #141b28;
-  --border:     #16202e;
-  --border-mid: #1e2b3d;
+  /* Yacht-grade navy — deep water, not black */
+  --bg:         #030e1e;
+  --bg-card:    #061628;
+  --bg-input:   #0a1e34;
+  --bg-hover:   #0e2640;
+  --border:     #1c3554;
+  --border-mid: #264a70;
 
+  /* Champagne gold — Rolex crown, AP bezel */
   --gold:       #c9aa71;
   --gold-light: #e2c98a;
   --gold-dim:   rgba(201,170,113,0.15);
-  --gold-glow:  rgba(201,170,113,0.25);
+  --gold-glow:  rgba(201,170,113,0.3);
 
-  --navy:       #1a3a5c;
-  --sky:        #4a8fc1;
+  /* Ocean blue accents */
+  --navy:       #1a4a72;
+  --sky:        #2d7db3;
 
-  --white:      #f5f2ec;
-  --off-white:  #c8c4bc;
-  --text-dim:   #6b7a8d;
-  --text-muted: #2e3d52;
+  /* Cream — boat linen, striped pant cuff */
+  --white:      #f2ead8;
+  --off-white:  #c8bfa8;
+  --text-dim:   #6b80a0;
+  --text-muted: #2a4060;
 
   --green:      #22c55e;
   --red:        #ef4444;
