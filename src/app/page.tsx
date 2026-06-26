@@ -417,11 +417,10 @@ export default function Home() {
                     style={{ transition: "stroke-dashoffset 0.7s cubic-bezier(.4,0,.2,1), stroke 0.4s ease" }}
                   />
                   {hasCard && <>
-                    <text x="80" y="74" textAnchor="middle" fontSize="38" fontWeight="900" fill={scoreColor}
+                    <text x="80" y="88" textAnchor="middle" fontSize="38" fontWeight="900" fill={scoreColor}
                       style={{ transition: "fill 0.4s ease", fontFamily: "-apple-system, sans-serif" }}>
                       {result.score}
                     </text>
-                    <text x="80" y="92" textAnchor="middle" fontSize="11" fill="#2e3d52" letterSpacing="2">OUT OF 100</text>
                   </>}
                 </svg>
               </div>
@@ -461,12 +460,24 @@ export default function Home() {
                   <div style={{ borderTop: "1px solid #16202e", paddingTop: 20 }}>
                     <p style={{ fontSize: 11, fontWeight: 700, letterSpacing: "0.1em", color: "#2e3d52", marginBottom: 14, textAlign: "left" }}>FACTOR BREAKDOWN</p>
                     <div className="flex flex-col gap-3">
-                      {result.factorScores.map((f) => {
+                      {result.factorScores.filter(f => f.name !== "Population Control").map((f) => {
                         const barColor = f.score >= 70 ? "#c9aa71" : f.score >= 45 ? "#f59e0b" : "#ef4444";
+                        const tooltips: Record<string, string> = {
+                          "ROI Potential": "Expected return on your total investment (card cost + grading fee). The single biggest driver of your score at 28% weight.",
+                          "PSA 10 Premium": "How much more a PSA 10 is worth vs. the raw card. A higher premium means grading unlocks serious value. Counts for 20%.",
+                          "Gem Rate (PSA 10%)": "Your estimated chance of pulling a PSA 10. Higher odds = less risk. Weighted at 17% — the second biggest swing factor.",
+                          "Athlete Demand": "How hot is this player right now? Hype drives buyers and keeps prices up. Worth 15% of your score.",
+                          "Grading Cost Efficiency": "The grading fee as a share of your expected payout. Cheaper relative to value = better. Counts for 8%.",
+                          "Downside Protection": "If the card only grades a PSA 8, do you still come out ahead? Measures your floor. Worth 7%.",
+                          "Market Liquidity": "How fast and easy is it to sell this card once graded? Illiquid cards tie up your money. Worth 5%.",
+                        };
                         return (
                           <div key={f.name}>
                             <div style={{ display: "flex", justifyContent: "space-between", marginBottom: 4 }}>
-                              <span style={{ fontSize: 11, color: "#6b7a8d" }}>{f.name}</span>
+                              <div style={{ display: "flex", alignItems: "center", gap: 5 }}>
+                                <span style={{ fontSize: 11, color: "#6b7a8d" }}>{f.name}</span>
+                                <FactorTooltip text={tooltips[f.name]} />
+                              </div>
                               <div style={{ display: "flex", gap: 6 }}>
                                 <span style={{ fontSize: 11, color: "#2e3d52" }}>{f.weight}%</span>
                                 <span style={{ fontSize: 11, fontWeight: 700, color: barColor }}>{f.score.toFixed(0)}</span>
@@ -591,10 +602,32 @@ function FieldLabel({ children }: { children: React.ReactNode }) {
   return <p style={{ fontSize: 11, color: "#6b7a8d", fontWeight: 600, marginBottom: 6 }}>{children}</p>;
 }
 
+function FactorTooltip({ text }: { text: string }) {
+  const [visible, setVisible] = useState(false);
+  return (
+    <div style={{ position: "relative", display: "inline-flex" }}>
+      <span
+        onMouseEnter={() => setVisible(true)}
+        onMouseLeave={() => setVisible(false)}
+        style={{ width: 13, height: 13, borderRadius: "50%", background: "#16202e", border: "1px solid #2e3d52", display: "flex", alignItems: "center", justifyContent: "center", fontSize: 9, color: "#6b7a8d", cursor: "default", flexShrink: 0 }}
+      >i</span>
+      {visible && (
+        <div style={{ position: "absolute", left: "50%", bottom: "calc(100% + 6px)", transform: "translateX(-50%)", background: "#0c1018", border: "1px solid #1e2b3d", borderRadius: 8, padding: "8px 10px", width: 200, fontSize: 11, color: "#c8c4bc", lineHeight: 1.5, zIndex: 50, pointerEvents: "none" }}>
+          {text}
+        </div>
+      )}
+    </div>
+  );
+}
+
 function NumberInput({ label, value, onChange, prefix, min = 0, max = 999999, step = 1, hint, accent }: {
   label: string; value: number; onChange: (v: number) => void;
   prefix?: string; min?: number; max?: number; step?: number; hint?: string; accent?: boolean;
 }) {
+  const [display, setDisplay] = useState(value === 0 ? "" : String(value));
+  useEffect(() => {
+    setDisplay(value === 0 ? "" : String(value));
+  }, [value]);
   return (
     <div>
       <FieldLabel>{label}</FieldLabel>
@@ -607,8 +640,13 @@ function NumberInput({ label, value, onChange, prefix, min = 0, max = 999999, st
       }}>
         {prefix && <span style={{ paddingLeft: 12, color: "#2e3d52", fontSize: 14 }}>{prefix}</span>}
         <input
-          type="number" value={value} min={min} max={max} step={step}
-          onChange={(e) => onChange(Math.max(min, Math.min(max, Number(e.target.value))))}
+          type="number" value={display} min={min} max={max} step={step}
+          onChange={(e) => setDisplay(e.target.value)}
+          onBlur={(e) => {
+            const num = Math.max(min, Math.min(max, Number(e.target.value) || 0));
+            onChange(num);
+            setDisplay(num === 0 ? "" : String(num));
+          }}
           style={{ flex: 1, background: "transparent", border: "none", outline: "none", padding: "11px 12px", fontSize: 14, fontWeight: 700, color: "#f5f2ec" }}
         />
       </div>

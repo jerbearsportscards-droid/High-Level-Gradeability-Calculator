@@ -65,7 +65,7 @@ export function calculateGradeability(inputs: CardInputs): GradeabilityResult {
   // ── FACTOR SCORING ──────────────────────────────────────────────
   const factors: FactorScore[] = [];
 
-  // 1. ROI Potential (25% weight)
+  // 1. ROI Potential (28% weight)
   // Score based on expected ROI: >100% = 100, 50–100% = 80, 20–50% = 60, 0–20% = 40, negative = 0–30
   let roiScore = 0;
   if (expectedROI >= 150) roiScore = 100;
@@ -76,7 +76,7 @@ export function calculateGradeability(inputs: CardInputs): GradeabilityResult {
   else if (expectedROI >= 0) roiScore = 30;
   else if (expectedROI >= -20) roiScore = 15;
   else roiScore = 0;
-  factors.push({ name: "ROI Potential", score: roiScore, weight: 25, contribution: roiScore * 0.25, label: `${expectedROI >= 0 ? "+" : ""}${expectedROI.toFixed(0)}%` });
+  factors.push({ name: "ROI Potential", score: roiScore, weight: 28, contribution: roiScore * 0.28, label: `${expectedROI >= 0 ? "+" : ""}${expectedROI.toFixed(0)}%` });
 
   // 2. PSA 10 Premium (20% weight)
   // How much more is the 10 worth vs raw?
@@ -98,9 +98,9 @@ export function calculateGradeability(inputs: CardInputs): GradeabilityResult {
   else if (gemRate >= 20) gemScore = 45;
   else if (gemRate >= 10) gemScore = 25;
   else gemScore = 10;
-  factors.push({ name: "Gem Rate (PSA 10%)", score: gemScore, weight: 15, contribution: gemScore * 0.15, label: `${gemRate}% chance` });
+  factors.push({ name: "Gem Rate (PSA 10%)", score: gemScore, weight: 17, contribution: gemScore * 0.17, label: `${gemRate}% chance` });
 
-  // 4. Population Control (10% weight)
+  // 4. Population Control (display only — 0% weight)
   // Lower pop = more scarce = better
   let popScore = 0;
   if (popTotal <= 10) popScore = 100;
@@ -111,11 +111,11 @@ export function calculateGradeability(inputs: CardInputs): GradeabilityResult {
   else if (popTotal <= 500) popScore = 25;
   else if (popTotal <= 1000) popScore = 15;
   else popScore = 5;
-  factors.push({ name: "Population Control", score: popScore, weight: 10, contribution: popScore * 0.10, label: `${popTotal} PSA 10s` });
+  factors.push({ name: "Population Control", score: popScore, weight: 0, contribution: 0, label: `${popTotal} PSA 10s` });
 
-  // 5. Athlete Demand (10% weight)
+  // 5. Athlete Demand (15% weight)
   const demandScore = (athleteDemand / 10) * 100;
-  factors.push({ name: "Athlete Demand", score: demandScore, weight: 10, contribution: demandScore * 0.10, label: `${athleteDemand}/10` });
+  factors.push({ name: "Athlete Demand", score: demandScore, weight: 15, contribution: demandScore * 0.15, label: `${athleteDemand}/10` });
 
   // 6. Grading Cost Efficiency (8% weight)
   // Fee as % of expected value — lower is better
